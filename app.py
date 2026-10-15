@@ -56,12 +56,10 @@ def load_data():
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    # حفظ مراكز المناطق لحساب المسافات بدقة وسرعة
     centroids = gdf_a.geometry.centroid
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
 
-    # تبسيط المضلعات لتسريع العرض
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
     return df_v, gdf_a
 
@@ -164,7 +162,7 @@ with tab1:
                 
         st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
 
-# Tab 2: Vendor Portal (Super-Fast Distance & Checkbox Grid)
+# Tab 2: Vendor Portal (Zero-Lag Batch Selection)
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
     st.info("Enter your Vendor ID to view your store location and configure delivery coverage.")
@@ -191,82 +189,63 @@ with tab2:
             
             # ترتيب المناطق الأقرب أولاً في نطاق 20 كم
             gdf_nearby = gdf_nearby[gdf_nearby["dist_km"] <= 20.0].sort_values("dist_km")
-            nearby_zones = gdf_nearby["Delivery Location Area Name"].tolist()
+            
+            # إرفاق المسافة باسم المنطقة لتسهيل الاختيار
+            gdf_nearby["display_name"] = gdf_nearby["Delivery Location Area Name"] + " (" + gdf_nearby["dist_km"].astype(str) + " km)"
+            display_to_raw = dict(zip(gdf_nearby["display_name"], gdf_nearby["Delivery Location Area Name"]))
+            raw_to_display = dict(zip(gdf_nearby["Delivery Location Area Name"], gdf_nearby["display_name"]))
+            
+            all_display_options = gdf_nearby["display_name"].tolist()
 
-            # تهيئة الحالة الافتراضية
-            if "portal_vendor_id" not in st.session_state or st.session_state["portal_vendor_id"] != v_id_clean:
-                st.session_state["portal_vendor_id"] = v_id_clean
-                initial_covered = nearby_zones[:3] if len(nearby_zones) >= 3 else nearby_zones
-                st.session_state["selected_zones"] = set(initial_covered)
+            # تهيئة الحالة
+            if "active_vendor_id" not in st.session_state or st.session_state["active_vendor_id"] != v_id_clean:
+                st.session_state["active_vendor_id"] = v_id_clean
+                initial_covered = gdf_nearby["Delivery Location Area Name"].head(3).tolist()
+                st.session_state["applied_zones"] = list(initial_covered)
+                st.session_state["form_default_display"] = [raw_to_display[z] for z in initial_covered if z in raw_to_display]
 
             st.markdown("---")
-            st.subheader("⚡ Quick Selection by Distance")
-            
-            # أزرار التحديد السريع بنصف القطر
+            st.subheader("⚡ 1-Click Quick Radius Selection")
+            st.caption("Click any button below to instantly pre-select all zones within that radius:")
+
             r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns(5)
             
-            if r_col1.button("🎯 Cover 3 km radius"):
-                zones_3km = gdf_nearby[gdf_nearby["dist_km"] <= 3.0]["Delivery Location Area Name"].tolist()
-                st.session_state["selected_zones"] = set(zones_3km)
+            if r_col1.button("🎯 Cover 3 km"):
+                zones = gdf_nearby[gdf_nearby["dist_km"] <= 3.0]["Delivery Location Area Name"].tolist()
+                st.session_state["applied_zones"] = zones
+                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
                 st.rerun()
 
-            if r_col2.button("🎯 Cover 5 km radius"):
-                zones_5km = gdf_nearby[gdf_nearby["dist_km"] <= 5.0]["Delivery Location Area Name"].tolist()
-                st.session_state["selected_zones"] = set(zones_5km)
+            if r_col2.button("🎯 Cover 5 km"):
+                zones = gdf_nearby[gdf_nearby["dist_km"] <= 5.0]["Delivery Location Area Name"].tolist()
+                st.session_state["applied_zones"] = zones
+                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
                 st.rerun()
 
-            if r_col3.button("🎯 Cover 8 km radius"):
-                zones_8km = gdf_nearby[gdf_nearby["dist_km"] <= 8.0]["Delivery Location Area Name"].tolist()
-                st.session_state["selected_zones"] = set(zones_8km)
+            if r_col3.button("🎯 Cover 8 km"):
+                zones = gdf_nearby[gdf_nearby["dist_km"] <= 8.0]["Delivery Location Area Name"].tolist()
+                st.session_state["applied_zones"] = zones
+                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
                 st.rerun()
 
-            if r_col4.button("🎯 Cover 12 km radius"):
-                zones_12km = gdf_nearby[gdf_nearby["dist_km"] <= 12.0]["Delivery Location Area Name"].tolist()
-                st.session_state["selected_zones"] = set(zones_12km)
+            if r_col4.button("🎯 Cover 12 km"):
+                zones = gdf_nearby[gdf_nearby["dist_km"] <= 12.0]["Delivery Location Area Name"].tolist()
+                st.session_state["applied_zones"] = zones
+                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
                 st.rerun()
 
             if r_col5.button("❌ Clear All"):
-                st.session_state["selected_zones"] = set()
+                st.session_state["applied_zones"] = []
+                st.session_state["form_default_display"] = []
                 st.rerun()
 
             st.markdown("---")
-            
-            # تقسيم الشاشة: جدول ذكي وسريع على اليسار + خريطة مرئية سلسة على اليمين
-            col_table, col_map = st.columns([1, 1])
 
-            with col_table:
-                st.subheader(f"📋 Delivery Zones ({len(st.session_state['selected_zones'])} Selected)")
-                st.caption("Check or uncheck boxes to select zones instantly (ordered by nearest):")
+            col_map_side, col_form_side = st.columns([1, 1])
 
-                table_data = pd.DataFrame({
-                    "Deliver?": [name in st.session_state["selected_zones"] for name in gdf_nearby["Delivery Location Area Name"]],
-                    "Area Name": gdf_nearby["Delivery Location Area Name"],
-                    "Distance": [f"{d} km" for d in gdf_nearby["dist_km"]]
-                })
-
-                edited_df = st.data_editor(
-                    table_data,
-                    column_config={
-                        "Deliver?": st.column_config.CheckboxColumn("Deliver?", help="Check to cover this zone", default=False),
-                        "Area Name": st.column_config.TextColumn("Zone Name"),
-                        "Distance": st.column_config.TextColumn("Distance from Store")
-                    },
-                    disabled=["Area Name", "Distance"],
-                    hide_index=True,
-                    use_container_width=True,
-                    height=500,
-                    key="zone_editor"
-                )
-
-                # تحديث فوري للمناطق المختارة
-                updated_selected = set(edited_df[edited_df["Deliver?"] == True]["Area Name"].tolist())
-                if updated_selected != st.session_state["selected_zones"]:
-                    st.session_state["selected_zones"] = updated_selected
-                    st.rerun()
-
-            with col_map:
-                st.subheader("🗺️ Live Coverage Map")
-                st.caption("🟢 Green: Delivery Zones | 🔵 Blue: Available Zones")
+            with col_map_side:
+                st.subheader(f"🗺️ Current Coverage Map ({len(st.session_state['applied_zones'])} Zones)")
+                st.caption("🟢 Green: Delivering here | 🔵 Blue: Available nearby")
 
                 v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
 
@@ -277,11 +256,11 @@ with tab2:
                     icon=folium.Icon(color="green", icon="star")
                 ).add_to(v_map)
 
-                current_set = st.session_state["selected_zones"]
+                applied_set = set(st.session_state["applied_zones"])
 
                 def vendor_zone_style(feature):
                     name = feature["properties"]["Delivery Location Area Name"]
-                    if name in current_set:
+                    if name in applied_set:
                         return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
                     else:
                         return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
@@ -293,24 +272,39 @@ with tab2:
                     tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
                 ).add_to(v_map)
 
-                # الخريطة الآن للعرض فقط بدون أحداث بطيئة لتتحرك بنعومة تامة 60fps
-                st_folium(
-                    v_map,
-                    width="100%",
-                    height=500,
-                    key="vendor_portal_static_map",
-                    returned_objects=[]
-                )
+                st_folium(v_map, width="100%", height=480, key="portal_map_view", returned_objects=[])
 
-            st.markdown("---")
-            # زر حفظ الطلب
-            if st.button("🚀 Submit Modification Request to Admin", type="primary", use_container_width=True):
-                final_list = list(st.session_state["selected_zones"])
-                if not final_list:
-                    st.warning("Please select at least one delivery zone.")
-                else:
-                    save_modification_request(v_id_clean, v_name, [], final_list)
-                    st.success(f"✅ Success! Your delivery request for {len(final_list)} zones has been submitted to Admin.")
+            with col_form_side:
+                st.subheader("📝 Select Delivery Zones")
+                st.caption("Pick or remove as many zones as you want. Nothing reloads until you click Apply!")
+
+                # الاستمارة التي تمنع أي ريلود أثناء الاختيار
+                with st.form("vendor_coverage_batch_form"):
+                    selected_display_zones = st.multiselect(
+                        "Delivery Zones (Sorted by distance from nearest to farthest):",
+                        options=all_display_options,
+                        default=st.session_state.get("form_default_display", [])
+                    )
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    submit_btn = st.form_submit_button("✅ Apply Selection & Submit Changes", type="primary", use_container_width=True)
+
+                    if submit_btn:
+                        chosen_raw_names = [display_to_raw[d] for d in selected_display_zones if d in display_to_raw]
+                        st.session_state["applied_zones"] = chosen_raw_names
+                        st.session_state["form_default_display"] = selected_display_zones
+                        
+                        save_modification_request(v_id_clean, v_name, [], chosen_raw_names)
+                        st.success(f"🎉 Success! Applied {len(chosen_raw_names)} zones to map & submitted to Admin.")
+                        st.rerun()
+
+            # عرض قائمة ملخصة للمناطق المختارة
+            if st.session_state["applied_zones"]:
+                with st.expander("📄 View Full List of Selected Zones", expanded=False):
+                    summary_df = pd.DataFrame({
+                        "Selected Zone": st.session_state["applied_zones"]
+                    })
+                    st.dataframe(summary_df, use_container_width=True)
 
 # Tab 3: Admin Review
 with tab3:
