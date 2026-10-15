@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import geopandas as gpd
 from shapely import wkt
+from shapely.geometry import Point
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
@@ -65,8 +66,10 @@ def save_modification_request(vendor_id, vendor_name, original_zones, new_zones)
     else:
         request_data.to_csv(file_name, index=False)
 
+# 3. Application Tabs
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
+# Tab 1: Overview Map
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
     col1, col2 = st.columns([1, 4])
@@ -145,13 +148,16 @@ with tab1:
                 
         st_folium(m, width="100%", height=600, key="main_map", returned_objects=[])
 
+# Tab 2: Vendor Self-Service Portal
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
     st.info("Enter your Vendor ID to view your location and managed coverage areas.")
     vendor_input_id = st.text_input("Enter Vendor ID:")
     
     if vendor_input_id:
-        vendor_data = df_vendors[df_vendors["Vendor Attributes Vendor Id"] == vendor_input_id.strip()]
+        v_id_clean = vendor_input_id.strip()
+        vendor_data = df_vendors[df_vendors["Vendor Attributes Vendor Id"] == v_id_clean]
+        
         if vendor_data.empty:
             st.error("Invalid Vendor ID. Please verify and try again.")
         else:
@@ -159,37 +165,125 @@ with tab2:
             v_name = v_row["Vendor Attributes Vendor Name (English)"]
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
-            all_available_areas = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
-            current_covered_areas = all_available_areas[:3] if len(all_available_areas) >= 3 else all_available_areas
             
+            all_available_areas = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
+            initial_covered = all_available_areas[:3] if len(all_available_areas) >= 3 else all_available_areas
+            
+            # Session State initialization for interactive clicks
+            if "active_vendor_id" not in st.session_state or st.session_state["active_vendor_id"] != v_id_clean:
+                st.session_state["active_vendor_id"] = v_id_clean
+                st.session_state["selected_zones"] = list(initial_covered)
+                st.session_state["vendor_multiselect"] = list(initial_covered)
+                st.session_state["last_map_click"] = None
+                st.session_state["vmap_center"] = [v_row["lat"], v_row["lng"]]
+                st.session_state["vmap_zoom"] = 12
+
             st.markdown("---")
             st.subheader("📍 Current Location & Service Map")
-            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
-            folium.Marker(location=[v_row["lat"], v_row["lng"]], popup="Your Store Location", icon=folium.Icon(color="green", icon="star")).add_to(v_map)
-            
-            covered_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].isin(current_covered_areas)]
-            if not covered_gdf.empty:
-                folium.GeoJson(
-                    covered_gdf[["Delivery Location Area Name", "geometry"]].to_json(),
-                    style_function=lambda x: {"fillColor": "#00ff00", "color": "darkgreen", "weight": 2, "fillOpacity": 0.4},
-                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Covered Zone: "])
-                ).add_to(v_map)
-                
-            st_folium(v_map, width="100%", height=400, key=f"map_{vendor_input_id}", returned_objects=[])
-            
+            st.caption("💡 **Tip:** Click directly on any area on the map to add or remove it from your delivery coverage!")
+
+            # Legend indicators
+            col_l1, col_l2 = st.columns(2)
+            col_l1.markdown("🟢 **Green Areas:** Currently Covered (Delivering here)")
+            col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
+
+            # Create Vendor Map
+            vmap_center = st.session_state.get("vmap_center", [v_row["lat"], v_row["lng"]])
+            vmap_zoom = st.session_state.get("vmap_zoom", 12)
+            v_map = folium.Map(location=vmap_center, zoom_start=vmap_zoom)
+
+            # Store location pin
+            folium.Marker(
+                location=[v_row["lat"], v_row["lng"]],
+                popup=f"<b>{v_name}</b><br>Store Location",
+                tooltip=v_name,
+                icon=folium.Icon(color="green", icon="star")
+            ).add_to(v_map)
+
+            # Render all zones with dynamic colors (Green = Selected, Blue = Available)
+            current_selected_set = set(st.session_state["selected_zones"])
+
+            def vendor_zone_style(feature):
+                name = feature["properties"]["Delivery Location Area Name"]
+                if name in current_selected_set:
+                    return {
+                        "fillColor": "#28a745",
+                        "color": "#155724",
+                        "weight": 2.5,
+                        "fillOpacity": 0.45
+                    }
+                else:
+                    return {
+                        "fillColor": "#3388ff",
+                        "color": "#004085",
+                        "weight": 1.0,
+                        "fillOpacity": 0.15
+                    }
+
+            folium.GeoJson(
+                gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                name="Delivery Zones",
+                style_function=vendor_zone_style,
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["Delivery Location Area Name"],
+                    aliases=["Click to Toggle: "]
+                )
+            ).add_to(v_map)
+
+            # Interactive Map Component
+            map_data = st_folium(
+                v_map,
+                width="100%",
+                height=520,
+                key=f"vendor_map_{v_id_clean}",
+                returned_objects=["last_clicked", "center", "zoom"]
+            )
+
+            # Handle Map Clicks to Add/Remove Zones
+            if map_data:
+                if map_data.get("center"):
+                    st.session_state["vmap_center"] = [map_data["center"]["lat"], map_data["center"]["lng"]]
+                if map_data.get("zoom"):
+                    st.session_state["vmap_zoom"] = map_data["zoom"]
+
+                new_click = map_data.get("last_clicked")
+                if new_click and new_click != st.session_state.get("last_map_click"):
+                    st.session_state["last_map_click"] = new_click
+                    click_pt = Point(new_click["lng"], new_click["lat"])
+                    matches = gdf_areas[gdf_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
+                    if not matches.empty:
+                        clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
+                        if clicked_zone in st.session_state["selected_zones"]:
+                            st.session_state["selected_zones"].remove(clicked_zone)
+                            st.toast(f"Removed from coverage: {clicked_zone}", icon="🗑️")
+                        else:
+                            st.session_state["selected_zones"].append(clicked_zone)
+                            st.toast(f"Added to coverage: {clicked_zone}", icon="✅")
+                        st.session_state["vendor_multiselect"] = list(st.session_state["selected_zones"])
+                        st.rerun()
+
             st.markdown("---")
             st.subheader("📝 Request Zone Coverage Updates")
-            with st.form("vendor_update_form"):
-                st.write("Add or remove delivery areas you service:")
-                updated_zones = st.multiselect("Service Areas:", options=all_available_areas, default=current_covered_areas)
-                submit_btn = st.form_submit_button("Submit Modification Request")
-                if submit_btn:
-                    if set(updated_zones) == set(current_covered_areas):
-                        st.warning("No changes detected in your zone selection.")
-                    else:
-                        save_modification_request(vendor_input_id, v_name, current_covered_areas, updated_zones)
-                        st.success("✅ Modification request submitted successfully! Pending admin review.")
 
+            def sync_from_multiselect():
+                st.session_state["selected_zones"] = list(st.session_state["vendor_multiselect"])
+
+            st.multiselect(
+                "Selected Service Areas (You can also type to search):",
+                options=all_available_areas,
+                key="vendor_multiselect",
+                on_change=sync_from_multiselect
+            )
+
+            if st.button("🚀 Submit Modification Request", type="primary"):
+                final_selected = st.session_state["selected_zones"]
+                if set(final_selected) == set(initial_covered):
+                    st.warning("No changes detected in your zone selection.")
+                else:
+                    save_modification_request(v_id_clean, v_name, initial_covered, final_selected)
+                    st.success("✅ Modification request submitted successfully! Pending admin review.")
+
+# Tab 3: Admin Review
 with tab3:
     st.header("📥 Vendor Coverage Change Requests")
     if os.path.exists("vendor_requests.csv"):
