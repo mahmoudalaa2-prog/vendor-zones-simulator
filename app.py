@@ -45,20 +45,15 @@ def load_data():
     gdf_a["area_size"] = gdf_a["geometry"].area
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     
-    # We must assign a string ID to each feature for Plotly to link them
     gdf_a['id'] = gdf_a.index.astype(str)
-    
-    # Simplify geometries to optimize browser rendering
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
     
-    return df_v, gdf_a
+    # Generate JSON string inside the cached load function to prevent unhashable cache errors
+    geojson_dict = json.loads(gdf_a.to_json())
+    
+    return df_v, gdf_a, geojson_dict
 
-df_vendors, gdf_areas = load_data()
-
-# Plotly needs GeoJSON dictionary
-@st.cache_data
-def get_geojson(gdf):
-    return json.loads(gdf.to_json())
+df_vendors, gdf_areas, full_geojson = load_data()
 
 def save_modification_request(vendor_id, vendor_name, original_zones, new_zones):
     request_data = pd.DataFrame([{
@@ -77,12 +72,10 @@ def save_modification_request(vendor_id, vendor_name, original_zones, new_zones)
 
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
-# Tab 1: Overview Map (Static for now)
 with tab1:
     st.header("Zones & Vendors Dashboard")
     st.info("The Admin Map is kept simple in this version to focus on the Vendor Portal Plotly implementation.")
 
-# Tab 2: Vendor Portal (Plotly Lasso Select)
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
     st.info("🎯 Use the Box Select or Lasso Select tool on the map to highlight multiple areas instantly!")
@@ -115,17 +108,13 @@ with tab2:
                 st.subheader("🗺️ Coverage Map (Lasso/Box Select)")
                 st.caption("🔍 In the top right corner of the map, click the **Lasso icon** (حبل) or **Box icon** (مربع). Then draw around the zones you want to select!")
                 
-                # Prepare data for Plotly
                 df_plot = gdf_areas[['id', 'Delivery Location Area Name']].copy()
                 df_plot['Status'] = 'Available'
                 df_plot.loc[df_plot['Delivery Location Area Name'].isin(st.session_state["selected_zones"]), 'Status'] = 'Covered'
                 
-                geojson_data = get_geojson(gdf_areas)
-                
-                # Create Plotly Map
                 fig = px.choropleth_mapbox(
                     df_plot,
-                    geojson=geojson_data,
+                    geojson=full_geojson,
                     locations='id',
                     featureidkey="properties.id",
                     color='Status',
@@ -137,7 +126,6 @@ with tab2:
                     opacity=0.4
                 )
                 
-                # Add Vendor Marker
                 fig.add_trace(go.Scattermapbox(
                     lat=[float(v_row["lat"])],
                     lon=[float(v_row["lng"])],
@@ -150,25 +138,20 @@ with tab2:
                 
                 fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, uirevision='constant')
                 
-                # Render Plotly Chart with native selection events (Supported in newer Streamlit)
                 try:
                     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode=('points', 'box', 'lasso'))
                     
-                    # Capture Lasso/Box Selection
                     if event and "selection" in event and event["selection"]["points"]:
-                        # Extract the IDs/Names of selected points
                         selected_indices = [p["location"] for p in event["selection"]["points"] if "location" in p]
                         if selected_indices:
                             selected_names = df_plot[df_plot["id"].isin(selected_indices)]["Delivery Location Area Name"].tolist()
                             
-                            # Merge with existing selected zones
                             new_set = set(st.session_state["selected_zones"]).union(set(selected_names))
                             if new_set != set(st.session_state["selected_zones"]):
                                 st.session_state["selected_zones"] = list(new_set)
                                 st.session_state["vendor_multiselect"] = list(new_set)
                                 st.rerun()
                 except TypeError:
-                    # Fallback if on_select is not supported by their Streamlit version
                     st.plotly_chart(fig, use_container_width=True)
                     st.warning("Your Streamlit version doesn't support Plotly Lasso return. Please use the form on the right.")
 
@@ -201,7 +184,6 @@ with tab2:
                         save_modification_request(v_id_clean, v_name, [], final_selected)
                         st.success(f"✅ Modification request for {len(final_selected)} zones submitted successfully!")
 
-# Tab 3: Admin Review
 with tab3:
     st.header("📥 Vendor Coverage Change Requests")
     if os.path.exists("vendor_requests.csv"):
