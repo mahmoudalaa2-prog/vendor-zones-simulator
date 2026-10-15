@@ -66,7 +66,6 @@ def save_modification_request(vendor_id, vendor_name, original_zones, new_zones)
     else:
         request_data.to_csv(file_name, index=False)
 
-# 3. Application Tabs
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
 # Tab 1: Overview Map
@@ -169,30 +168,28 @@ with tab2:
             all_available_areas = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
             initial_covered = all_available_areas[:3] if len(all_available_areas) >= 3 else all_available_areas
             
-            # Session State initialization for interactive clicks
             if "active_vendor_id" not in st.session_state or st.session_state["active_vendor_id"] != v_id_clean:
                 st.session_state["active_vendor_id"] = v_id_clean
                 st.session_state["selected_zones"] = list(initial_covered)
                 st.session_state["vendor_multiselect"] = list(initial_covered)
-                st.session_state["last_map_click"] = None
-                st.session_state["vmap_center"] = [v_row["lat"], v_row["lng"]]
-                st.session_state["vmap_zoom"] = 12
+                st.session_state["last_processed_click"] = None
+
+            # Filter zones within ~30 km buffer around vendor for fast rendering
+            v_point = Point(v_row["lng"], v_row["lat"])
+            nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.30))
+            selected_mask = gdf_areas["Delivery Location Area Name"].isin(st.session_state["selected_zones"])
+            portal_areas = gdf_areas[nearby_mask | selected_mask].copy()
 
             st.markdown("---")
             st.subheader("📍 Current Location & Service Map")
-            st.caption("💡 **Tip:** Click directly on any area on the map to add or remove it from your delivery coverage!")
+            st.caption("💡 **Tip:** Click on any zone polygon to add or remove it from your delivery coverage.")
 
-            # Legend indicators
             col_l1, col_l2 = st.columns(2)
-            col_l1.markdown("🟢 **Green Areas:** Currently Covered (Delivering here)")
+            col_l1.markdown("🟢 **Green Areas:** Delivering here")
             col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
 
-            # Create Vendor Map
-            vmap_center = st.session_state.get("vmap_center", [v_row["lat"], v_row["lng"]])
-            vmap_zoom = st.session_state.get("vmap_zoom", 12)
-            v_map = folium.Map(location=vmap_center, zoom_start=vmap_zoom)
+            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
 
-            # Store location pin
             folium.Marker(
                 location=[v_row["lat"], v_row["lng"]],
                 popup=f"<b>{v_name}</b><br>Store Location",
@@ -200,65 +197,53 @@ with tab2:
                 icon=folium.Icon(color="green", icon="star")
             ).add_to(v_map)
 
-            # Render all zones with dynamic colors (Green = Selected, Blue = Available)
             current_selected_set = set(st.session_state["selected_zones"])
 
             def vendor_zone_style(feature):
                 name = feature["properties"]["Delivery Location Area Name"]
                 if name in current_selected_set:
-                    return {
-                        "fillColor": "#28a745",
-                        "color": "#155724",
-                        "weight": 2.5,
-                        "fillOpacity": 0.45
-                    }
+                    return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.50}
                 else:
-                    return {
-                        "fillColor": "#3388ff",
-                        "color": "#004085",
-                        "weight": 1.0,
-                        "fillOpacity": 0.15
-                    }
+                    return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.20}
 
             folium.GeoJson(
-                gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                 name="Delivery Zones",
                 style_function=vendor_zone_style,
-                tooltip=folium.GeoJsonTooltip(
-                    fields=["Delivery Location Area Name"],
-                    aliases=["Click to Toggle: "]
-                )
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
             ).add_to(v_map)
 
-            # Interactive Map Component
+            # Map configured to only return object clicks (no lag on pan/zoom)
             map_data = st_folium(
                 v_map,
                 width="100%",
                 height=520,
                 key=f"vendor_map_{v_id_clean}",
-                returned_objects=["last_clicked", "center", "zoom"]
+                returned_objects=["last_object_clicked", "last_clicked"]
             )
 
-            # Handle Map Clicks to Add/Remove Zones
+            # Detect zone clicks
             if map_data:
-                if map_data.get("center"):
-                    st.session_state["vmap_center"] = [map_data["center"]["lat"], map_data["center"]["lng"]]
-                if map_data.get("zoom"):
-                    st.session_state["vmap_zoom"] = map_data["zoom"]
+                click = map_data.get("last_object_clicked") or map_data.get("last_clicked")
+                if click and click != st.session_state.get("last_processed_click"):
+                    st.session_state["last_processed_click"] = click
+                    click_pt = Point(click["lng"], click["lat"])
+                    matches = portal_areas[portal_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
+                    
+                    if matches.empty:
+                        # Fallback to nearest boundary if clicked right on the border
+                        dists = portal_areas.geometry.distance(click_pt)
+                        if not dists.empty and dists.min() < 0.005:
+                            matches = portal_areas.loc[[dists.idxmin()]]
 
-                new_click = map_data.get("last_clicked")
-                if new_click and new_click != st.session_state.get("last_map_click"):
-                    st.session_state["last_map_click"] = new_click
-                    click_pt = Point(new_click["lng"], new_click["lat"])
-                    matches = gdf_areas[gdf_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
                     if not matches.empty:
                         clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
                         if clicked_zone in st.session_state["selected_zones"]:
                             st.session_state["selected_zones"].remove(clicked_zone)
-                            st.toast(f"Removed from coverage: {clicked_zone}", icon="🗑️")
+                            st.toast(f"Removed: {clicked_zone}", icon="🗑️")
                         else:
                             st.session_state["selected_zones"].append(clicked_zone)
-                            st.toast(f"Added to coverage: {clicked_zone}", icon="✅")
+                            st.toast(f"Added: {clicked_zone}", icon="✅")
                         st.session_state["vendor_multiselect"] = list(st.session_state["selected_zones"])
                         st.rerun()
 
