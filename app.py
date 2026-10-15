@@ -61,6 +61,14 @@ def load_data():
         crs="EPSG:4326"
     )
     
+    # حساب المساحة لاستبعاد المضلعات العملاقة التي تحجب الجمهورية
+    gdf_a['area_size'] = gdf_a['geometry'].area
+    # فلترة مضلع "الجمعيات الخيرية" وأي مضلع وهمي يغطي كامل الدولة
+    gdf_a = gdf_a[gdf_a['area_size'] < 0.5]
+    
+    # ترتيب المضلعات من الأكبر للأصغر حتى تظهر الأحياء الدقيقة في الأعلى وقابلة للضغط
+    gdf_a = gdf_a.sort_values(by='area_size', ascending=False)
+    
     # تسريع رسم المضلعات
     gdf_a['geometry'] = gdf_a['geometry'].simplify(
         tolerance=0.001,
@@ -116,7 +124,7 @@ with tab1:
             
         if not filtered_v.empty:
             center = [filtered_v['lat'].mean(), filtered_v['lng'].mean()]
-            zoom = 10 if selected_city != "الكل" else 6
+            zoom = 11 if selected_city != "الكل" else 6
         else:
             center = [30.0444, 31.2357]
             zoom = 6
@@ -130,8 +138,8 @@ with tab1:
                 style_function=lambda feature: {
                     'fillColor': '#0055ff',
                     'color': '#002266',
-                    'weight': 1.5,
-                    'fillOpacity': 0.3
+                    'weight': 1.2,
+                    'fillOpacity': 0.25
                 },
                 tooltip=folium.GeoJsonTooltip(
                     fields=['Delivery Location Area Name (Arabic)'],
