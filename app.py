@@ -41,6 +41,9 @@ def load_data():
     df_v = df_v.dropna(subset=['lat', 'lng'])
     df_v['Vendor Attributes Vendor Id'] = df_v['Vendor Attributes Vendor Id'].astype(str)
 
+    # إنشاء عمود للبحث يجمع بين الاسم والـ ID
+    df_v['Search_Name'] = df_v['Vendor Attributes Vendor Name (English)'] + " (" + df_v['Vendor Attributes Vendor Id'] + ")"
+
     # تحميل المناطق
     df_a = pd.read_excel(file_path, sheet_name='Area')
     df_a['cleaned_wkt'] = df_a['Delivery Location Area Polygon'].apply(clean_wkt)
@@ -63,10 +66,9 @@ def load_data():
     
     # حساب المساحة لاستبعاد المضلعات العملاقة التي تحجب الجمهورية
     gdf_a['area_size'] = gdf_a['geometry'].area
-    # فلترة مضلع "الجمعيات الخيرية" وأي مضلع وهمي يغطي كامل الدولة
     gdf_a = gdf_a[gdf_a['area_size'] < 0.5]
     
-    # ترتيب المضلعات من الأكبر للأصغر حتى تظهر الأحياء الدقيقة في الأعلى وقابلة للضغط
+    # ترتيب المضلعات من الأكبر للأصغر
     gdf_a = gdf_a.sort_values(by='area_size', ascending=False)
     
     # تسريع رسم المضلعات
@@ -114,17 +116,36 @@ with tab1:
             df_vendors['Vendor Attributes Vendor City'].dropna().unique().tolist()
         )
         selected_city = st.selectbox("المدينة:", all_cities, key="dash_city")
+        
+        # --- الفلتر الجديد للفيندور ---
+        if selected_city == "الكل":
+            vendor_options = ["الكل"] + sorted(df_vendors['Search_Name'].tolist())
+        else:
+            city_vendors = df_vendors[df_vendors['Vendor Attributes Vendor City'] == selected_city]
+            vendor_options = ["الكل"] + sorted(city_vendors['Search_Name'].tolist())
+            
+        selected_vendor = st.selectbox("ابحث عن فيندور (اختياري):", vendor_options, key="dash_vendor")
+        # ------------------------------
+        
         show_zones = st.checkbox("عرض جميع حدود المناطق", value=True, key="dash_zones")
     
     with col2:
-        if selected_city == "الكل":
-            filtered_v = df_vendors
-        else:
-            filtered_v = df_vendors[df_vendors['Vendor Attributes Vendor City'] == selected_city]
+        # تطبيق الفلاتر
+        filtered_v = df_vendors
+        if selected_city != "الكل":
+            filtered_v = filtered_v[filtered_v['Vendor Attributes Vendor City'] == selected_city]
             
+        if selected_vendor != "الكل":
+            filtered_v = filtered_v[filtered_v['Search_Name'] == selected_vendor]
+            
+        # تحديد مركز الخريطة ومستوى التكبير
         if not filtered_v.empty:
             center = [filtered_v['lat'].mean(), filtered_v['lng'].mean()]
-            zoom = 11 if selected_city != "الكل" else 6
+            # إذا اختار فيندور محدد، نكبر الخريطة جداً على مكانه
+            if selected_vendor != "الكل":
+                zoom = 15
+            else:
+                zoom = 11 if selected_city != "الكل" else 6
         else:
             center = [30.0444, 31.2357]
             zoom = 6
@@ -154,10 +175,14 @@ with tab1:
         if not filtered_v.empty:
             cluster = MarkerCluster().add_to(m)
             for _, row in filtered_v.iterrows():
+                # تلوين العلامة بالأخضر إذا تم البحث عن فيندور محدد لتمييزه
+                icon_color = "green" if selected_vendor != "الكل" else "red"
+                icon_shape = "star" if selected_vendor != "الكل" else "shopping-cart"
+                
                 folium.Marker(
                     location=[row['lat'], row['lng']],
                     tooltip=row['Vendor Attributes Vendor Name (English)'],
-                    icon=folium.Icon(color="red", icon="shopping-cart", prefix="fa")
+                    icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
                 ).add_to(cluster)
                 
         st_folium(m, width="100%", height=600, key="main_map", returned_objects=[])
