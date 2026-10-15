@@ -63,7 +63,6 @@ def load_data():
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
     
-    # دقة عالية للحفاظ على حدود المناطق الصغيرة داخل المجمعات
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
     return df_v, gdf_a
 
@@ -197,12 +196,11 @@ with tab2:
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # تهيئة المتغيرات
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(2).tolist()
-                st.session_state["search_bar_zones"] = list(initial_covered) # المناطق في مربع البحث
-                st.session_state["applied_zones"] = list(initial_covered)    # المناطق الملونة بالأخضر
+                st.session_state["search_bar_zones"] = list(initial_covered)
+                st.session_state["applied_zones"] = list(initial_covered)
                 st.session_state["last_click_sig"] = None
                 st.session_state["search_widget_ver"] = 0
                 st.session_state["vmap_center"] = [v_row["lat"], v_row["lng"]]
@@ -232,7 +230,6 @@ with tab2:
 
                 applied_set = set(current_applied)
 
-                # تلوين المناطق المعتمدة فقط بالأخضر (النقرات لا تغير اللون إطلاقاً)
                 def vendor_zone_style(feature):
                     name = feature["properties"]["Delivery Location Area Name"]
                     if name in applied_set:
@@ -247,7 +244,6 @@ with tab2:
                     tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
                 ).add_to(v_map)
 
-                # التقاط النقرة مع الاحتفاظ بالتكبير وموقع الخريطة
                 map_data = st_folium(
                     v_map,
                     width="100%",
@@ -256,7 +252,6 @@ with tab2:
                     returned_objects=["last_clicked", "last_object_clicked", "zoom", "center"]
                 )
 
-                # معالجة النقر بدقة تامة لإضافة المنطقة لمربع البحث
                 if map_data:
                     if map_data.get("zoom"):
                         st.session_state["vmap_zoom"] = map_data["zoom"]
@@ -266,13 +261,11 @@ with tab2:
                     clicked_zone = None
                     sig = None
 
-                    # 1. استخراج اسم المنطقة مباشرة من خصائص الكائن المضغوط
                     obj_clicked = map_data.get("last_object_clicked")
                     if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
                         clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
                         sig = f"obj_{clicked_zone}"
 
-                    # 2. استخراج المنطقة عبر نقطة الإحداثيات إذا تعذر الوصول لخصائص الكائن
                     if not clicked_zone and map_data.get("last_clicked"):
                         c = map_data["last_clicked"]
                         if isinstance(c, dict) and "lat" in c and "lng" in c:
@@ -286,7 +279,6 @@ with tab2:
                             if not matches.empty:
                                 clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
 
-                    # إضافة أو حذف المنطقة من قائمة مربع البحث وتحديثه فوراً
                     if clicked_zone and sig != st.session_state.get("last_click_sig"):
                         st.session_state["last_click_sig"] = sig
                         curr_search = list(st.session_state.get("search_bar_zones", []))
@@ -304,7 +296,6 @@ with tab2:
                 st.subheader("📝 Selected Zones")
                 st.caption("Zones you click on the map will automatically appear here:")
 
-                # مفتاح ديناميكي يجبر Streamlit على إظهار الإضافة في نفس اللحظة
                 widget_key = f"ms_box_{st.session_state.get('search_widget_ver', 0)}"
                 chosen_zones = st.multiselect(
                     "Service Areas:",
@@ -319,14 +310,12 @@ with tab2:
                 btn_col1, btn_col2 = st.columns([1, 1])
                 
                 with btn_col1:
-                    # زر Apply هو الوحيد الذي يغير ألوان الخريطة
                     if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
                         st.session_state["applied_zones"] = list(st.session_state["search_bar_zones"])
                         st.session_state["show_pricing_table"] = False
                         st.rerun()
                         
                 with btn_col2:
-                    # زر Submit يفتح جدول التسعير
                     if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
                         if not st.session_state.get("applied_zones"):
                             st.warning("Please select and 'Apply to Map' at least one zone first.")
@@ -468,4 +457,33 @@ with tab3:
                         
                         csv_data = download_df.to_csv(index=False).encode('utf-8-sig')
                         
-                        if len(selected_displays)
+                        if len(selected_displays) == 1:
+                            v_name = selected_displays.iloc[0]['Vendor Name']
+                            file_name = f"Detailed_Pricing_{v_name}.csv"
+                            st.success(f"1 Request selected. The file contains {len(download_df)} detailed zone rows.")
+                        else:
+                            file_name = "Combined_Detailed_Pricing.csv"
+                            st.success(f"{len(selected_displays)} Requests selected. The file contains {len(download_df)} combined zone rows.")
+                            
+                        st.download_button(
+                            label="📥 Download Detailed CSV (Row per Zone)",
+                            data=csv_data,
+                            file_name=file_name,
+                            mime="text/csv",
+                            type="primary"
+                        )
+                        
+                with col_down2:
+                    st.write("#### 🗑️ Clear Database")
+                    st.warning("Delete all requests permanently.")
+                    if st.button("Delete All Requests Data", type="secondary"):
+                        os.remove("vendor_pricing_requests.csv")
+                        st.rerun()
+
+        except Exception as e:
+            st.error("A critical format error occurred with the database file.")
+            if st.button("Force Clear Corrupted Data", type="primary"):
+                os.remove("vendor_pricing_requests.csv")
+                st.rerun()
+    else:
+        st.info("No detailed requests received yet. Wait for vendors to submit.")
