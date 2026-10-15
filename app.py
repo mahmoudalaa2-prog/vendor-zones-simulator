@@ -17,7 +17,7 @@ from datetime import datetime
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management", page_icon="📍")
 
 # ==========================================
-# 2. دوال المعالجة
+# 2. دوال المعالجة والمسافات
 # ==========================================
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
@@ -58,12 +58,13 @@ def load_data():
     gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
     gdf_a["area_size"] = gdf_a["geometry"].area
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
-    gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
     centroids = gdf_a.geometry.centroid
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
+    
+    # دقة عالية للحفاظ على حدود المناطق الصغيرة داخل المجمعات
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
@@ -75,13 +76,9 @@ def get_nearby_polygons(lat, lng, radius_km):
     nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
     return gdf_areas[nearby_mask].copy()
 
-# ==========================================
-# دالة الحفظ الجديدة (كل منطقة في صف مستقل)
-# ==========================================
 def save_detailed_request(vendor_id, vendor_name, edited_df):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # نأخذ الجدول الذي ملأه الفيندور ونضيف عليه الأعمدة الأساسية
     save_df = edited_df.copy()
     save_df.insert(0, "Date", date_str)
     save_df.insert(1, "Vendor ID", str(vendor_id))
@@ -90,7 +87,13 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
     
     file_name = "vendor_pricing_requests.csv"
     if os.path.exists(file_name):
-        save_df.to_csv(file_name, mode="a", header=False, index=False)
+        # التحقق إذا كان الملف قديماً لا يحتوي الأعمدة الجديدة
+        old_df = pd.read_csv(file_name)
+        if "Zone" not in old_df.columns:
+            # إذا كان قديماً يتم التخلص منه وبدء ملف جديد
+            save_df.to_csv(file_name, index=False)
+        else:
+            save_df.to_csv(file_name, mode="a", header=False, index=False)
     else:
         save_df.to_csv(file_name, index=False)
 
@@ -143,7 +146,7 @@ with tab2:
 
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
-                st.caption("Click a zone to automatically add it to the search box on the right without changing colors.")
+                st.caption("Click any zone on the map to add it to the search box. Colors will NOT change until you click 'Apply'.")
                 
                 v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
                 folium.Marker(
@@ -283,108 +286,114 @@ with tab2:
                         st.success("🎉 Success! Your zones, delivery times, and fees have been submitted to Admin.")
 
 # ==========================================
-# Tab 3: Admin Review (جدول الإدارة المنظم والتحميل المفرّق)
+# Tab 3: Admin Review
 # ==========================================
 with tab3:
     st.header("📥 Vendor Pricing & Coverage Requests")
     
-    if os.path.exists("vendor_pricing_requests.csv"):
-        # نقرأ قاعدة البيانات التي تحتوي على كل منطقة في صف منفصل
-        raw_df = pd.read_csv("vendor_pricing_requests.csv")
-        raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
-        
-        # ----------------- الفلاتر -----------------
-        st.write("### 🔍 Filter Requests")
-        f_col1, f_col2 = st.columns(2)
-        
-        all_req_names = ["All"] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
-        filter_name = f_col1.selectbox("Filter by Vendor Name:", all_req_names, key="admin_req_name")
-        
-        if filter_name != "All":
-            temp_req_ids = raw_df[raw_df["Vendor Name"] == filter_name]["Vendor ID"].dropna().unique().tolist()
-        else:
-            temp_req_ids = raw_df["Vendor ID"].dropna().unique().tolist()
+    file_path = "vendor_pricing_requests.csv"
+    if os.path.exists(file_path):
+        try:
+            raw_df = pd.read_csv(file_path)
             
-        all_req_ids = ["All"] + sorted(temp_req_ids)
-        filter_id = f_col2.selectbox("Filter by Vendor ID:", all_req_ids, key="admin_req_id")
-        
-        # ----------------- تجميع البيانات للعرض النظيف -----------------
-        # لكي لا يرى الإدمن 50 صفاً لنفس الفيندور، نجمعهم في صف واحد للعرض فقط
-        filtered_raw = raw_df.copy()
-        if filter_name != "All":
-            filtered_raw = filtered_raw[filtered_raw["Vendor Name"] == filter_name]
-        if filter_id != "All":
-            filtered_raw = filtered_raw[filtered_raw["Vendor ID"] == filter_id]
-            
-        display_df = filtered_raw.groupby(["Date", "Vendor ID", "Vendor Name", "Status"]).agg(
-            Total_Zones=("Zone", "count"),
-            Zones_Preview=("Zone", lambda x: ", ".join(x.head(3)) + ("..." if len(x) > 3 else ""))
-        ).reset_index()
-        display_df.rename(columns={"Total_Zones": "Total Zones Count", "Zones_Preview": "Zones Overview"}, inplace=True)
-        
-        st.markdown("---")
-        display_df.insert(0, "Select", False)
-        
-        st.write(f"### 📋 Incoming Requests Overview ({len(display_df)} requests)")
-        st.caption("Check the boxes to select requests. The downloaded file will contain detailed row-by-row data for each zone.")
-        
-        edited_display_df = st.data_editor(
-            display_df,
-            column_config={
-                "Select": st.column_config.CheckboxColumn("Select", help="Select to download", default=False),
-                "Date": st.column_config.TextColumn(disabled=True),
-                "Vendor ID": st.column_config.TextColumn(disabled=True),
-                "Vendor Name": st.column_config.TextColumn(disabled=True),
-                "Total Zones Count": st.column_config.NumberColumn(disabled=True),
-                "Zones Overview": st.column_config.TextColumn(disabled=True),
-                "Status": st.column_config.TextColumn(disabled=True)
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="admin_requests_editor"
-        )
-        
-        # ----------------- تجهيز ملف التحميل -----------------
-        selected_displays = edited_display_df[edited_display_df["Select"] == True]
-        
-        st.markdown("---")
-        col_down1, col_down2 = st.columns([7, 3])
-        
-        with col_down1:
-            st.write("#### 💾 Download Selected Requests")
-            if selected_displays.empty:
-                st.info("Select one or more requests from the table above to download the detailed CSV.")
+            # حماية لمعالجة الملفات القديمة التي تسبب تعطل النظام
+            if "Zone" not in raw_df.columns:
+                st.warning("⚠️ Legacy data format detected. The old database format is incompatible and has been cleared.")
+                os.remove(file_path)
+                st.rerun()
             else:
-                # نستخرج المعرفات والتواريخ المحددة لنجلب تفاصيلها من البيانات الأصلية المفرّقة
-                selected_vendors_dates = selected_displays[["Vendor ID", "Date"]].apply(tuple, axis=1).tolist()
+                raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                 
-                # جلب الصفوف التفصيلية من raw_df بناءً على اختيار الإدمن
-                download_df = raw_df[raw_df[["Vendor ID", "Date"]].apply(tuple, axis=1).isin(selected_vendors_dates)]
+                st.write("### 🔍 Filter Requests")
+                f_col1, f_col2 = st.columns(2)
                 
-                csv_data = download_df.to_csv(index=False).encode('utf-8-sig')
+                all_req_names = ["All"] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
+                filter_name = f_col1.selectbox("Filter by Vendor Name:", all_req_names, key="admin_req_name")
                 
-                if len(selected_displays) == 1:
-                    v_name = selected_displays.iloc[0]['Vendor Name']
-                    file_name = f"Detailed_Pricing_{v_name}.csv"
-                    st.success(f"1 Request selected. The file contains {len(download_df)} detailed zone rows.")
+                if filter_name != "All":
+                    temp_req_ids = raw_df[raw_df["Vendor Name"] == filter_name]["Vendor ID"].dropna().unique().tolist()
                 else:
-                    file_name = "Combined_Detailed_Pricing.csv"
-                    st.success(f"{len(selected_displays)} Requests selected. The file contains {len(download_df)} combined zone rows.")
+                    temp_req_ids = raw_df["Vendor ID"].dropna().unique().tolist()
                     
-                st.download_button(
-                    label="📥 Download Detailed CSV (Row per Zone)",
-                    data=csv_data,
-                    file_name=file_name,
-                    mime="text/csv",
-                    type="primary"
+                all_req_ids = ["All"] + sorted(temp_req_ids)
+                filter_id = f_col2.selectbox("Filter by Vendor ID:", all_req_ids, key="admin_req_id")
+                
+                filtered_raw = raw_df.copy()
+                if filter_name != "All":
+                    filtered_raw = filtered_raw[filtered_raw["Vendor Name"] == filter_name]
+                if filter_id != "All":
+                    filtered_raw = filtered_raw[filtered_raw["Vendor ID"] == filter_id]
+                    
+                display_df = filtered_raw.groupby(["Date", "Vendor ID", "Vendor Name", "Status"]).agg(
+                    Total_Zones=("Zone", "count"),
+                    Zones_Preview=("Zone", lambda x: ", ".join(x.head(3)) + ("..." if len(x) > 3 else ""))
+                ).reset_index()
+                display_df.rename(columns={"Total_Zones": "Total Zones Count", "Zones_Preview": "Zones Overview"}, inplace=True)
+                
+                st.markdown("---")
+                display_df.insert(0, "Select", False)
+                
+                st.write(f"### 📋 Incoming Requests Overview ({len(display_df)} requests)")
+                st.caption("Check the boxes to select requests. The downloaded file will contain detailed row-by-row data for each zone.")
+                
+                edited_display_df = st.data_editor(
+                    display_df,
+                    column_config={
+                        "Select": st.column_config.CheckboxColumn("Select", help="Select to download", default=False),
+                        "Date": st.column_config.TextColumn(disabled=True),
+                        "Vendor ID": st.column_config.TextColumn(disabled=True),
+                        "Vendor Name": st.column_config.TextColumn(disabled=True),
+                        "Total Zones Count": st.column_config.NumberColumn(disabled=True),
+                        "Zones Overview": st.column_config.TextColumn(disabled=True),
+                        "Status": st.column_config.TextColumn(disabled=True)
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="admin_requests_editor"
                 )
                 
-        with col_down2:
-            st.write("#### 🗑️ Clear Database")
-            st.warning("Delete all requests permanently.")
-            if st.button("Delete All Requests Data", type="secondary"):
+                selected_displays = edited_display_df[edited_display_df["Select"] == True]
+                
+                st.markdown("---")
+                col_down1, col_down2 = st.columns([7, 3])
+                
+                with col_down1:
+                    st.write("#### 💾 Download Selected Requests")
+                    if selected_displays.empty:
+                        st.info("Select one or more requests from the table above to download the detailed CSV.")
+                    else:
+                        selected_vendors_dates = selected_displays[["Vendor ID", "Date"]].apply(tuple, axis=1).tolist()
+                        download_df = raw_df[raw_df[["Vendor ID", "Date"]].apply(tuple, axis=1).isin(selected_vendors_dates)]
+                        
+                        csv_data = download_df.to_csv(index=False).encode('utf-8-sig')
+                        
+                        if len(selected_displays) == 1:
+                            v_name = selected_displays.iloc[0]['Vendor Name']
+                            file_name = f"Detailed_Pricing_{v_name}.csv"
+                            st.success(f"1 Request selected. The file contains {len(download_df)} detailed zone rows.")
+                        else:
+                            file_name = "Combined_Detailed_Pricing.csv"
+                            st.success(f"{len(selected_displays)} Requests selected. The file contains {len(download_df)} combined zone rows.")
+                            
+                        st.download_button(
+                            label="📥 Download Detailed CSV (Row per Zone)",
+                            data=csv_data,
+                            file_name=file_name,
+                            mime="text/csv",
+                            type="primary"
+                        )
+                        
+                with col_down2:
+                    st.write("#### 🗑️ Clear Database")
+                    st.warning("Delete all requests permanently.")
+                    if st.button("Delete All Requests Data", type="secondary"):
+                        os.remove("vendor_pricing_requests.csv")
+                        st.rerun()
+
+        except Exception as e:
+            st.error("A critical format error occurred with the old database file.")
+            if st.button("Force Clear Corrupted Data", type="primary"):
                 os.remove("vendor_pricing_requests.csv")
                 st.rerun()
-
     else:
         st.info("No detailed requests received yet. Wait for vendors to submit.")
