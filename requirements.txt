@@ -5,4 +5,3 @@ geopandas
 shapely
 folium
 streamlit-folium
-plotly
