@@ -47,28 +47,19 @@ def load_data():
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    # Simplify geometries aggressively to make map ultra-fast
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.003, preserve_topology=False)
+    # تبسيط المضلعات لتسريع العرض التفاعلي
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
 
-# جلب المناطق القريبة بناءً على المسافة التي يحددها المستخدم
-@st.cache_data
-def get_nearby_polygons(lat, lng, radius_km):
-    v_point = Point(lng, lat)
-    # تحويل الكيلومترات إلى درجات تقريبية (كل 1 درجة تعادل تقريباً 111 كم)
-    radius_deg = radius_km / 111.0
-    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
-    return gdf_areas[nearby_mask].copy()
-
-def save_modification_request(vendor_id, vendor_name, original_zones, new_zones):
+def save_modification_request(vendor_id, vendor_name, zones_list):
     request_data = pd.DataFrame([{
         "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Vendor ID": vendor_id,
         "Vendor Name": vendor_name,
-        "Original Zones": ", ".join(original_zones),
-        "Requested Zones": ", ".join(new_zones),
+        "Total Zones Count": len(zones_list),
+        "Requested Zones": ", ".join(zones_list),
         "Status": "Pending"
     }])
     file_name = "vendor_requests.csv"
@@ -118,7 +109,12 @@ with tab1:
             
         if not filtered_v.empty:
             center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
-            zoom = 13 if (selected_name != "All" or selected_v_id != "All") else 11 if selected_chain != "All" else 11 if selected_city != "All" else 6
+            if selected_name != "All" or selected_v_id != "All":
+                zoom = 15
+            elif selected_chain != "All":
+                zoom = 12
+            else:
+                zoom = 11 if selected_city != "All" else 6
         else:
             center = [30.0444, 31.2357]
             zoom = 6
@@ -132,8 +128,8 @@ with tab1:
                 style_function=lambda feature: {
                     "fillColor": "#0055ff",
                     "color": "#002266",
-                    "weight": 1.0,
-                    "fillOpacity": 0.20
+                    "weight": 1.2,
+                    "fillOpacity": 0.25
                 },
                 tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
             ).add_to(m)
@@ -152,10 +148,9 @@ with tab1:
                     icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
                 ).add_to(cluster)
                 
-        # إيقاف إرجاع البيانات في خريطة الإدارة لتسريع الموقع بالكامل
         st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
 
-# Tab 2: Vendor Portal (Fast Clicking Map)
+# Tab 2: Vendor Portal
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
     st.info("Enter your Vendor ID to view your store location and configure your delivery coverage areas.")
@@ -173,35 +168,29 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
 
-            st.markdown("---")
-            # مؤشر المسافة لجعل الخريطة سريعة جداً عند تحميل مناطق أقل
-            st.subheader("📍 Map Loading Radius")
-            map_radius_km = st.slider(
-                "Adjust how far you want to see zones on the map (Smaller radius = Much faster clicking):",
-                min_value=3, max_value=40, value=6, step=1,
-                help="Decrease this to 5km to make map clicking extremely fast. Increase it if you need to select far areas."
-            )
+            all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
-            all_available_zones = sorted(portal_areas["Delivery Location Area Name"].dropna().unique().tolist())
-
+            # State initialization
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
-                initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
-                st.session_state["selected_zones"] = list(initial_covered)
-                st.session_state["last_clicked_coord"] = None
-                
-            current_saved = st.session_state["selected_zones"]
+                st.session_state["active_zones"] = []
+                st.session_state["staged_selection"] = []
 
             st.markdown("---")
-            st.subheader(f"🗺️ Live Coverage Map ({len(current_saved)} Zones Selected)")
-            st.caption("💡 **Tip:** Click directly on any area on the map to instantly add or remove it!")
+            st.subheader(f"🗺️ Coverage Map ({len(st.session_state['active_zones'])} Zones Applied)")
+            st.caption("💡 **Tip:** Click on any zone on the map to view its name and copy it to clipboard with 1 click!")
 
             col_l1, col_l2 = st.columns(2)
-            col_l1.markdown("🟢 **Green Areas:** Delivering here")
-            col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
+            col_l1.markdown("🟢 **Green Areas:** Applied & Verified (Delivering here)")
+            col_l2.markdown("🔵 **Blue Areas:** Available nearby zones")
 
-            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
+            # عرض المضلعات المحيطة بالفيندور + أي مناطق مختارة
+            v_point = Point(v_row["lng"], v_row["lat"])
+            nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.30))
+            active_mask = gdf_areas["Delivery Location Area Name"].isin(st.session_state["active_zones"])
+            portal_display_areas = gdf_areas[nearby_mask | active_mask].copy()
+
+            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
 
             folium.Marker(
                 location=[v_row["lat"], v_row["lng"]],
@@ -210,75 +199,99 @@ with tab2:
                 icon=folium.Icon(color="green", icon="star")
             ).add_to(v_map)
 
-            current_saved_set = set(current_saved)
+            active_set = set(st.session_state["active_zones"])
 
             def vendor_zone_style(feature):
                 name = feature["properties"]["Delivery Location Area Name"]
-                if name in current_saved_set:
+                if name in active_set:
                     return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
                 else:
                     return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
 
-            # دمج مضلعات المناطق الثابتة والمختارة لتقليل الضغط على المتصفح
-            selected_mask = gdf_areas["Delivery Location Area Name"].isin(current_saved)
-            display_gdf = pd.concat([portal_areas, gdf_areas[selected_mask]]).drop_duplicates(subset=["Delivery Location Area Name"])
-
             folium.GeoJson(
-                display_gdf[["Delivery Location Area Name", "geometry"]].to_json(),
+                portal_display_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                 name="Delivery Zones",
                 style_function=vendor_zone_style,
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Toggle: "])
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "]),
+                popup=folium.GeoJsonPopup(fields=["Delivery Location Area Name"], aliases=["Zone Name: "])
             ).add_to(v_map)
 
-            map_data = st_folium(
-                v_map,
-                width="100%",
-                height=520,
-                key=f"vendor_map_{v_id_clean}_{map_radius_km}",
-                returned_objects=["last_clicked"]
-            )
+            # كود جافاسكريبت لنسخ اسم المنطقة تلقائياً للحافظة عند فتح النافذة المنبثقة
+            copy_script = """
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                var observer = new MutationObserver(function(mutations) {
+                    mutations.forEach(function(mutation) {
+                        mutation.addedNodes.forEach(function(node) {
+                            if (node.classList && node.classList.contains('leaflet-popup')) {
+                                var content = node.querySelector('.leaflet-popup-content');
+                                if (content && !content.querySelector('.copy-btn')) {
+                                    var td = content.querySelector('td') || content;
+                                    var zoneName = td.innerText.replace('Zone Name:', '').trim();
+                                    
+                                    try {
+                                        navigator.clipboard.writeText(zoneName);
+                                    } catch(e) {}
+                                    
+                                    var btn = document.createElement('button');
+                                    btn.className = 'copy-btn';
+                                    btn.innerHTML = '📋 Click to Copy: ' + zoneName;
+                                    btn.style = 'margin-top:8px; padding:6px 12px; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer; width:100%; font-weight:bold; font-size:12px;';
+                                    btn.onclick = function() {
+                                        navigator.clipboard.writeText(zoneName);
+                                        btn.innerHTML = '✅ Copied to Clipboard!';
+                                        setTimeout(function(){ btn.innerHTML = '📋 Click to Copy: ' + zoneName; }, 1800);
+                                    };
+                                    content.appendChild(btn);
+                                }
+                            }
+                        });
+                    });
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+            });
+            </script>
+            """
+            v_map.get_root().html.add_child(folium.Element(copy_script))
 
-            # تسجيل النقرات
-            if map_data and map_data.get("last_clicked"):
-                click = map_data["last_clicked"]
-                if click != st.session_state.get("last_clicked_coord"):
-                    st.session_state["last_clicked_coord"] = click
-                    click_pt = Point(click["lng"], click["lat"])
-                    
-                    matches = display_gdf[display_gdf.geometry.contains(click_pt)]
-                    if not matches.empty:
-                        clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
-                        
-                        if clicked_zone in st.session_state["selected_zones"]:
-                            st.session_state["selected_zones"].remove(clicked_zone)
-                        else:
-                            st.session_state["selected_zones"].append(clicked_zone)
-                            
-                        st.rerun()
+            # returned_objects=[] يجعل الخريطة تعمل بنعومة كاملة وبدون أي إعادة تحميل عند النقر
+            st_folium(v_map, width="100%", height=480, key="portal_map_view", returned_objects=[])
 
             st.markdown("---")
-            st.subheader("📝 Request Zone Coverage Updates")
+            st.subheader("📝 Selected Delivery Zones")
+            st.caption("Paste or search for the zone names below. Use **Apply** to preview them in Green on the map, then **Submit** to finalize.")
 
-            def sync_from_multiselect():
-                st.session_state["selected_zones"] = list(st.session_state["sync_multiselect"])
-
-            # دمج القائمة لتشمل المناطق التي اختارها من خارج نطاق البحث لتظل ظاهرة
-            all_dropdown_options = sorted(list(set(all_available_zones + current_saved)))
-
-            st.multiselect(
-                "Selected Service Areas (You can also type to search):",
-                options=all_dropdown_options,
-                default=current_saved,
-                key="sync_multiselect",
-                on_change=sync_from_multiselect
+            chosen_zones = st.multiselect(
+                "Delivery Zones Selection:",
+                options=all_available_zones,
+                default=st.session_state.get("staged_selection", st.session_state["active_zones"]),
+                key="vendor_multiselect_box"
             )
 
-            if st.button("🚀 Submit Modification Request", type="primary", use_container_width=True):
-                if not current_saved:
-                    st.warning("No zones selected!")
+            # زرا Apply و Submit جنباً إلى جنب
+            btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
+            
+            with btn_col1:
+                apply_clicked = st.button("👁️ Apply (Preview on Map)", type="secondary", use_container_width=True)
+                
+            with btn_col2:
+                submit_clicked = st.button("🚀 Submit to Admin", type="primary", use_container_width=True)
+
+            if apply_clicked:
+                st.session_state["active_zones"] = chosen_zones
+                st.session_state["staged_selection"] = chosen_zones
+                st.toast(f"Updated! {len(chosen_zones)} zones are now highlighted in Green on the map.", icon="🟢")
+                st.rerun()
+
+            if submit_clicked:
+                if not chosen_zones:
+                    st.warning("Please select at least one zone before submitting.")
                 else:
-                    save_modification_request(v_id_clean, v_name, [], current_saved)
-                    st.success(f"✅ Modification request for {len(current_saved)} zones submitted successfully! Pending admin review.")
+                    st.session_state["active_zones"] = chosen_zones
+                    st.session_state["staged_selection"] = chosen_zones
+                    save_modification_request(v_id_clean, v_name, chosen_zones)
+                    st.success(f"🎉 Success! Request for {len(chosen_zones)} zones submitted to Admin and saved.")
+                    st.rerun()
 
 # Tab 3: Admin Review
 with tab3:
