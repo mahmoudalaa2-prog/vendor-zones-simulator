@@ -62,7 +62,7 @@ def load_data():
         crs="EPSG:4326"
     )
     
-    # حساب المساحة لاستبعاد المضلعات العملاقة
+    # استبعاد المضلعات العملاقة
     gdf_a['area_size'] = gdf_a['geometry'].area
     gdf_a = gdf_a[gdf_a['area_size'] < 0.5]
     gdf_a = gdf_a.sort_values(by='area_size', ascending=False)
@@ -109,15 +109,84 @@ with tab1:
     with col1:
         st.write("**أدوات الفلترة**")
         
-        # 1. فلتر المدينة
-        all_cities = ["الكل"] + sorted(df_vendors['Vendor Attributes Vendor City'].dropna().unique().tolist())
-        selected_city = st.selectbox("1. اختر المدينة:", all_cities, key="dash_city")
+        all_cities = ["الكل"] + sorted(
+            df_vendors['Vendor Attributes Vendor City'].dropna().unique().tolist()
+        )
+        selected_city = st.selectbox(
+            "1. اختر المدينة:",
+            options=all_cities,
+            key="dash_city"
+        )
         
         st.write("---")
         st.write("**بحث متقدم عن الفيندورز:**")
         
-        temp_df = df_vendors if selected_city == "الكل" else df_vendors[df_vendors['Vendor Attributes Vendor City'] == selected_city]
+        if selected_city == "الكل":
+            temp_df = df_vendors
+        else:
+            temp_df = df_vendors[df_vendors['Vendor Attributes Vendor City'] == selected_city]
+            
+        vendor_names = ["الكل"] + sorted(
+            temp_df['Vendor Attributes Vendor Name (English)'].dropna().unique().tolist()
+        )
+        selected_name = st.selectbox(
+            "ابحث بـ اسم الفيندور:",
+            options=vendor_names,
+            key="dash_name"
+        )
         
-        # 2. فلتر اسم الفيندور
-        vendor_names = ["الكل"] + sorted(temp_df['Vendor Attributes Vendor Name (English)'].dropna().unique().tolist())
-        selected_name = st.selectbox("ابحث بـ اسم الفيندور:", vendor_names, key="
+        vendor_ids = ["الكل"] + sorted(
+            temp_df['Vendor Attributes Vendor Id'].dropna().unique().tolist()
+        )
+        selected_v_id = st.selectbox(
+            "ابحث بـ Vendor ID:",
+            options=vendor_ids,
+            key="dash_vid"
+        )
+        
+        chain_ids = ["الكل"] + sorted(
+            temp_df['Chain Attributes Chain ID'].dropna().unique().tolist()
+        )
+        selected_chain = st.selectbox(
+            "ابحث بـ Chain ID:",
+            options=chain_ids,
+            key="dash_chain"
+        )
+        
+        st.write("---")
+        show_zones = st.checkbox(
+            "عرض جميع حدود المناطق",
+            value=True,
+            key="dash_zones"
+        )
+        
+        if st.button("🔄 إعادة ضبط الفلاتر"):
+            st.rerun()
+            
+    with col2:
+        filtered_v = df_vendors
+        
+        if selected_city != "الكل":
+            filtered_v = filtered_v[filtered_v['Vendor Attributes Vendor City'] == selected_city]
+        if selected_name != "الكل":
+            filtered_v = filtered_v[filtered_v['Vendor Attributes Vendor Name (English)'] == selected_name]
+        if selected_v_id != "الكل":
+            filtered_v = filtered_v[filtered_v['Vendor Attributes Vendor Id'] == selected_v_id]
+        if selected_chain != "الكل":
+            filtered_v = filtered_v[filtered_v['Chain Attributes Chain ID'] == selected_chain]
+            
+        if not filtered_v.empty:
+            center = [filtered_v['lat'].mean(), filtered_v['lng'].mean()]
+            if selected_name != "الكل" or selected_v_id != "الكل":
+                zoom = 15
+            elif selected_chain != "الكل":
+                zoom = 12
+            else:
+                zoom = 11 if selected_city != "الكل" else 6
+        else:
+            center = [30.0444, 31.2357]
+            zoom = 6
+            
+        m = folium.Map(location=center, zoom_start=zoom)
+        
+        if show
