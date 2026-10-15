@@ -134,4 +134,4 @@ with tab1:
                 name="مناطق التغطية",
                 style_function=lambda feature: {
                     'fillColor': '#0055ff',
-                    'color': '#00226
+                    'color': 'navy',
