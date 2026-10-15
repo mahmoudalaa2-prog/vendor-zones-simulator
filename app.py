@@ -171,7 +171,6 @@ with tab1:
                     icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
                 ).add_to(cluster)
                 
-        # الخريطة مبرمجة لتعمل كعرض فقط لمنع أي بطء أو إعادة تحميل للصفحة
         st_folium(m, width="100%", height=650, key="main_map_admin", returned_objects=[])
 
 # ==========================================
@@ -198,25 +197,32 @@ with tab2:
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
+            # تهيئة المتغيرات
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(2).tolist()
-                
-                st.session_state["vendor_multiselect"] = list(initial_covered)
-                st.session_state["applied_zones"] = list(initial_covered)
+                st.session_state["search_bar_zones"] = list(initial_covered) # المناطق في مربع البحث
+                st.session_state["applied_zones"] = list(initial_covered)    # المناطق الملونة بالأخضر
                 st.session_state["last_click_sig"] = None
+                st.session_state["search_widget_ver"] = 0
+                st.session_state["vmap_center"] = [v_row["lat"], v_row["lng"]]
+                st.session_state["vmap_zoom"] = 13
                 st.session_state["show_pricing_table"] = False
 
-            current_applied = st.session_state["applied_zones"]
+            current_applied = st.session_state.get("applied_zones", [])
 
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
+            # ---------------- عمود الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
                 st.caption("Click any zone on the map to add it to the search box. Colors will NOT change until you click 'Apply'.")
-                
-                v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
+
+                vmap_center = st.session_state.get("vmap_center", [v_row["lat"], v_row["lng"]])
+                vmap_zoom = st.session_state.get("vmap_zoom", 13)
+                v_map = folium.Map(location=vmap_center, zoom_start=vmap_zoom)
+
                 folium.Marker(
                     location=[v_row["lat"], v_row["lng"]],
                     popup=f"<b>{v_name}</b>",
@@ -226,6 +232,7 @@ with tab2:
 
                 applied_set = set(current_applied)
 
+                # تلوين المناطق المعتمدة فقط بالأخضر (النقرات لا تغير اللون إطلاقاً)
                 def vendor_zone_style(feature):
                     name = feature["properties"]["Delivery Location Area Name"]
                     if name in applied_set:
@@ -237,74 +244,101 @@ with tab2:
                     portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                     name="Delivery Zones",
                     style_function=vendor_zone_style,
-                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Select: "])
+                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
                 ).add_to(v_map)
 
+                # التقاط النقرة مع الاحتفاظ بالتكبير وموقع الخريطة
                 map_data = st_folium(
                     v_map,
                     width="100%",
                     height=500,
                     key=f"vmap_{v_id_clean}_{map_radius_km}",
-                    returned_objects=["last_clicked", "last_object_clicked"]
+                    returned_objects=["last_clicked", "last_object_clicked", "zoom", "center"]
                 )
 
-                click = map_data.get("last_object_clicked") or map_data.get("last_clicked") if map_data else None
-                if click:
-                    click_lat = click.get("lat")
-                    click_lng = click.get("lng")
-                    click_sig = f"{click_lat:.5f}_{click_lng:.5f}"
-                    
-                    if click_sig != st.session_state.get("last_click_sig"):
-                        st.session_state["last_click_sig"] = click_sig
-                        click_pt = Point(click_lng, click_lat)
-                        
-                        matches = portal_areas[portal_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
-                        if matches.empty:
-                            dists = portal_areas.geometry.distance(click_pt)
-                            if not dists.empty and dists.min() < 0.005:
-                                matches = portal_areas.loc[[dists.idxmin()]]
-                                
-                        if not matches.empty:
-                            clicked_zone_name = matches.iloc[0]["Delivery Location Area Name"]
-                            current_list = list(st.session_state["vendor_multiselect"])
-                            
-                            if clicked_zone_name in current_list:
-                                current_list.remove(clicked_zone_name)
-                            else:
-                                current_list.append(clicked_zone_name)
-                                
-                            st.session_state["vendor_multiselect"] = current_list
-                            st.session_state["show_pricing_table"] = False
-                            st.rerun()
+                # معالجة النقر بدقة تامة لإضافة المنطقة لمربع البحث
+                if map_data:
+                    if map_data.get("zoom"):
+                        st.session_state["vmap_zoom"] = map_data["zoom"]
+                    if map_data.get("center"):
+                        st.session_state["vmap_center"] = [map_data["center"]["lat"], map_data["center"]["lng"]]
 
+                    clicked_zone = None
+                    sig = None
+
+                    # 1. استخراج اسم المنطقة مباشرة من خصائص الكائن المضغوط
+                    obj_clicked = map_data.get("last_object_clicked")
+                    if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
+                        clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
+                        sig = f"obj_{clicked_zone}"
+
+                    # 2. استخراج المنطقة عبر نقطة الإحداثيات إذا تعذر الوصول لخصائص الكائن
+                    if not clicked_zone and map_data.get("last_clicked"):
+                        c = map_data["last_clicked"]
+                        if isinstance(c, dict) and "lat" in c and "lng" in c:
+                            sig = f"coords_{c['lat']:.5f}_{c['lng']:.5f}"
+                            pt = Point(c["lng"], c["lat"])
+                            matches = portal_areas[portal_areas.geometry.contains(pt)].sort_values(by="area_size", ascending=True)
+                            if matches.empty:
+                                dists = portal_areas.geometry.distance(pt)
+                                if not dists.empty and dists.min() < 0.005:
+                                    matches = portal_areas.loc[[dists.idxmin()]]
+                            if not matches.empty:
+                                clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
+
+                    # إضافة أو حذف المنطقة من قائمة مربع البحث وتحديثه فوراً
+                    if clicked_zone and sig != st.session_state.get("last_click_sig"):
+                        st.session_state["last_click_sig"] = sig
+                        curr_search = list(st.session_state.get("search_bar_zones", []))
+                        if clicked_zone in curr_search:
+                            curr_search.remove(clicked_zone)
+                        else:
+                            curr_search.append(clicked_zone)
+                        st.session_state["search_bar_zones"] = curr_search
+                        st.session_state["search_widget_ver"] += 1
+                        st.session_state["show_pricing_table"] = False
+                        st.rerun()
+
+            # ---------------- عمود مربع البحث ----------------
             with col_form:
                 st.subheader("📝 Selected Zones")
-                st.caption("Zones you click on the map will instantly appear here:")
+                st.caption("Zones you click on the map will automatically appear here:")
 
+                # مفتاح ديناميكي يجبر Streamlit على إظهار الإضافة في نفس اللحظة
+                widget_key = f"ms_box_{st.session_state.get('search_widget_ver', 0)}"
                 chosen_zones = st.multiselect(
                     "Service Areas:",
                     options=all_available_zones,
-                    key="vendor_multiselect"
+                    default=st.session_state.get("search_bar_zones", []),
+                    key=widget_key
                 )
+
+                if chosen_zones != st.session_state.get("search_bar_zones", []):
+                    st.session_state["search_bar_zones"] = chosen_zones
 
                 btn_col1, btn_col2 = st.columns([1, 1])
                 
                 with btn_col1:
+                    # زر Apply هو الوحيد الذي يغير ألوان الخريطة
                     if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
-                        st.session_state["applied_zones"] = list(st.session_state["vendor_multiselect"])
+                        st.session_state["applied_zones"] = list(st.session_state["search_bar_zones"])
                         st.session_state["show_pricing_table"] = False
                         st.rerun()
                         
                 with btn_col2:
+                    # زر Submit يفتح جدول التسعير
                     if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
-                        if not st.session_state["applied_zones"]:
+                        if not st.session_state.get("applied_zones"):
                             st.warning("Please select and 'Apply to Map' at least one zone first.")
-                        elif set(st.session_state["applied_zones"]) != set(st.session_state["vendor_multiselect"]):
+                        elif set(st.session_state.get("applied_zones", [])) != set(st.session_state.get("search_bar_zones", [])):
                             st.warning("You have unapplied changes! Please click 'Apply to Map' first.")
                         else:
                             st.session_state["show_pricing_table"] = True
                             st.rerun()
 
+            # ==========================================
+            # 4. جدول التسعير والمسافات (يظهر بعد Submit)
+            # ==========================================
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
                 st.subheader("💰 Set Delivery Pricing & Time")
@@ -434,33 +468,4 @@ with tab3:
                         
                         csv_data = download_df.to_csv(index=False).encode('utf-8-sig')
                         
-                        if len(selected_displays) == 1:
-                            v_name = selected_displays.iloc[0]['Vendor Name']
-                            file_name = f"Detailed_Pricing_{v_name}.csv"
-                            st.success(f"1 Request selected. The file contains {len(download_df)} detailed zone rows.")
-                        else:
-                            file_name = "Combined_Detailed_Pricing.csv"
-                            st.success(f"{len(selected_displays)} Requests selected. The file contains {len(download_df)} combined zone rows.")
-                            
-                        st.download_button(
-                            label="📥 Download Detailed CSV (Row per Zone)",
-                            data=csv_data,
-                            file_name=file_name,
-                            mime="text/csv",
-                            type="primary"
-                        )
-                        
-                with col_down2:
-                    st.write("#### 🗑️ Clear Database")
-                    st.warning("Delete all requests permanently.")
-                    if st.button("Delete All Requests Data", type="secondary"):
-                        os.remove("vendor_pricing_requests.csv")
-                        st.rerun()
-
-        except Exception as e:
-            st.error("A critical format error occurred with the database file.")
-            if st.button("Force Clear Corrupted Data", type="primary"):
-                os.remove("vendor_pricing_requests.csv")
-                st.rerun()
-    else:
-        st.info("No detailed requests received yet. Wait for vendors to submit.")
+                        if len(selected_displays)
