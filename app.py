@@ -47,17 +47,17 @@ def load_data():
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    # Very aggressive simplification for vendor portal to make it instant
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
+    # تبسيط شديد للمضلعات لجعل الرسم سريع جداً
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.003, preserve_topology=False)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
 
+# تقليل نطاق المندوب إلى 10 كم فقط (0.09 درجة) لجعل الضغط لحظي بدون تحميل
 @st.cache_data
 def get_vendor_nearby_geojson(lat, lng):
     v_point = Point(lng, lat)
-    # Smaller buffer (0.2 degrees = ~20km) to load less polygons and make map super fast
-    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.20))
+    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.09))
     portal_areas = gdf_areas[nearby_mask].copy()
     return portal_areas
 
@@ -139,8 +139,7 @@ with tab1:
                     "weight": 1.2,
                     "fillOpacity": 0.25
                 },
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "]),
-                popup=folium.GeoJsonPopup(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
             ).add_to(m)
             
         if not filtered_v.empty:
@@ -177,7 +176,8 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
             
-            all_available_areas = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
+            portal_areas = get_vendor_nearby_geojson(v_row["lat"], v_row["lng"])
+            all_available_areas = sorted(portal_areas["Delivery Location Area Name"].tolist())
             initial_covered = all_available_areas[:3] if len(all_available_areas) >= 3 else all_available_areas
             
             # State Initialization
@@ -185,8 +185,6 @@ with tab2:
                 st.session_state["active_vendor_id"] = v_id_clean
                 st.session_state["selected_zones"] = list(initial_covered)
                 st.session_state["vendor_multiselect"] = list(initial_covered)
-
-            portal_areas = get_vendor_nearby_geojson(v_row["lat"], v_row["lng"])
 
             st.markdown("---")
             st.subheader("📍 Current Location & Service Map")
@@ -196,7 +194,7 @@ with tab2:
             col_l1.markdown("🟢 **Green Areas:** Currently Covered (Delivering here)")
             col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
 
-            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
+            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
 
             folium.Marker(
                 location=[v_row["lat"], v_row["lng"]],
@@ -210,9 +208,9 @@ with tab2:
             def vendor_zone_style(feature):
                 name = feature["properties"]["Delivery Location Area Name"]
                 if name in current_selected_set:
-                    return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.50}
+                    return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
                 else:
-                    return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.20}
+                    return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
 
             folium.GeoJson(
                 portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
@@ -221,7 +219,7 @@ with tab2:
                 tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Toggle: "])
             ).add_to(v_map)
 
-            # Limit returned_objects to ONLY last_clicked to make it lightning fast
+            # Returned objects restricted to make the response instant
             map_data = st_folium(
                 v_map,
                 width="100%",
@@ -235,9 +233,7 @@ with tab2:
                 click = map_data["last_clicked"]
                 click_pt = Point(click["lng"], click["lat"])
                 
-                # Check which polygon the click intersects
                 matches = portal_areas[portal_areas.geometry.contains(click_pt)]
-                
                 if not matches.empty:
                     clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
                     
