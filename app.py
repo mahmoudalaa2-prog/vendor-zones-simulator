@@ -63,7 +63,6 @@ def load_data():
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
     
-    # دقة عالية للحفاظ على حدود المناطق الصغيرة داخل المجمعات
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
     return df_v, gdf_a
 
@@ -102,7 +101,7 @@ tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal"
 # ==========================================
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
-    st.info("The Admin Map is active.")
+    st.info("The Admin Map is temporarily hidden to optimize the performance of the Vendor Portal.")
 
 # ==========================================
 # Tab 2: Vendor Portal
@@ -128,14 +127,11 @@ with tab2:
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # تهيئة الحالة الأولية
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(2).tolist()
                 
-                # المفتاح المباشر المتصل بـ multiselect
                 st.session_state["vendor_multiselect"] = list(initial_covered)
-                # المناطق المعتمدة باللون الأخضر على الخريطة
                 st.session_state["applied_zones"] = list(initial_covered)
                 st.session_state["last_click_sig"] = None
                 st.session_state["show_pricing_table"] = False
@@ -145,7 +141,6 @@ with tab2:
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
-            # ---------------- عمود الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
                 st.caption("Click any zone on the map to add it to the search box. Colors will NOT change until you click 'Apply'.")
@@ -160,7 +155,6 @@ with tab2:
 
                 applied_set = set(current_applied)
 
-                # التلوين بالأخضر معتمد على applied_zones فقط
                 def vendor_zone_style(feature):
                     name = feature["properties"]["Delivery Location Area Name"]
                     if name in applied_set:
@@ -175,7 +169,6 @@ with tab2:
                     tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Select: "])
                 ).add_to(v_map)
 
-                # التقاط النقرة
                 map_data = st_folium(
                     v_map,
                     width="100%",
@@ -184,7 +177,6 @@ with tab2:
                     returned_objects=["last_clicked", "last_object_clicked"]
                 )
 
-                # معالجة النقر على الخريطة
                 click = map_data.get("last_object_clicked") or map_data.get("last_clicked") if map_data else None
                 if click:
                     click_lat = click.get("lat")
@@ -195,7 +187,6 @@ with tab2:
                         st.session_state["last_click_sig"] = click_sig
                         click_pt = Point(click_lng, click_lat)
                         
-                        # الترتيب التصاعدي: يختار المنطقة الأصغر حجماً (Area) بدلاً من المضلع الأكبر المحيط بها
                         matches = portal_areas[portal_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
                         if matches.empty:
                             dists = portal_areas.geometry.distance(click_pt)
@@ -206,23 +197,19 @@ with tab2:
                             clicked_zone_name = matches.iloc[0]["Delivery Location Area Name"]
                             current_list = list(st.session_state["vendor_multiselect"])
                             
-                            # إضافة أو حذف المنطقة من القائمة
                             if clicked_zone_name in current_list:
                                 current_list.remove(clicked_zone_name)
                             else:
                                 current_list.append(clicked_zone_name)
                                 
-                            # تحديث مباشر ومضمون لمربع الاختيار
                             st.session_state["vendor_multiselect"] = current_list
                             st.session_state["show_pricing_table"] = False
                             st.rerun()
 
-            # ---------------- عمود مربع البحث ----------------
             with col_form:
                 st.subheader("📝 Selected Zones")
-                st.caption("Zones clicked on the map automatically appear here:")
+                st.caption("Zones you click on the map will instantly appear here:")
 
-                # قراءة وتعديل مباشر من session_state
                 chosen_zones = st.multiselect(
                     "Service Areas:",
                     options=all_available_zones,
@@ -247,9 +234,6 @@ with tab2:
                             st.session_state["show_pricing_table"] = True
                             st.rerun()
 
-            # ==========================================
-            # 4. جدول التسعير والمسافات (يظهر بعد Submit)
-            # ==========================================
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
                 st.subheader("💰 Set Delivery Pricing & Time")
@@ -299,14 +283,101 @@ with tab2:
                         st.success("🎉 Success! Your zones, delivery times, and fees have been submitted to Admin.")
 
 # ==========================================
-# Tab 3: شاشة الإدارة
+# Tab 3: Admin Review
 # ==========================================
 with tab3:
     st.header("📥 Vendor Pricing & Coverage Requests")
+    
     if os.path.exists("vendor_pricing_requests.csv"):
         req_df = pd.read_csv("vendor_pricing_requests.csv")
-        st.dataframe(req_df, use_container_width=True)
-        with open("vendor_pricing_requests.csv", "rb") as file:
-            st.download_button("📥 Download (CSV)", file, "vendor_pricing.csv", "text/csv")
+        # تحويل Vendor ID إلى نصوص لتفادي الفواصل العشرية
+        req_df["Vendor ID"] = req_df["Vendor ID"].astype(str)
+        
+        # ----------------- الفلاتر -----------------
+        st.write("### 🔍 Filter Requests")
+        f_col1, f_col2 = st.columns(2)
+        
+        all_req_names = ["All"] + sorted(req_df["Vendor Name"].dropna().unique().tolist())
+        filter_name = f_col1.selectbox("Filter by Vendor Name:", all_req_names, key="admin_req_name")
+        
+        # تضييق نطاق الـ ID بناءً على اسم الفيندور المختار لسهولة البحث
+        if filter_name != "All":
+            temp_req_ids = req_df[req_df["Vendor Name"] == filter_name]["Vendor ID"].dropna().unique().tolist()
+        else:
+            temp_req_ids = req_df["Vendor ID"].dropna().unique().tolist()
+            
+        all_req_ids = ["All"] + sorted(temp_req_ids)
+        filter_id = f_col2.selectbox("Filter by Vendor ID:", all_req_ids, key="admin_req_id")
+        
+        # تطبيق الفلاتر على الجدول
+        filtered_req = req_df.copy()
+        if filter_name != "All":
+            filtered_req = filtered_req[filtered_req["Vendor Name"] == filter_name]
+        if filter_id != "All":
+            filtered_req = filtered_req[filtered_req["Vendor ID"] == filter_id]
+            
+        st.markdown("---")
+        
+        # إضافة عمود Checkbox لاختيار الطلبات
+        filtered_req.insert(0, "Select", False)
+        
+        st.write(f"### 📋 Incoming Requests List ({len(filtered_req)} requests)")
+        st.caption("Check the boxes next to the requests you want to download. You can select one or multiple.")
+        
+        # جدول تفاعلي لاختيار الطلبات
+        edited_requests_df = st.data_editor(
+            filtered_req,
+            column_config={
+                "Select": st.column_config.CheckboxColumn("Select", help="Select to download", default=False),
+                "Date": st.column_config.TextColumn(disabled=True),
+                "Vendor ID": st.column_config.TextColumn(disabled=True),
+                "Vendor Name": st.column_config.TextColumn(disabled=True),
+                "Total Zones Count": st.column_config.NumberColumn(disabled=True),
+                "Details & Pricing": st.column_config.TextColumn(disabled=True),
+                "Status": st.column_config.TextColumn(disabled=True)
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="admin_requests_editor"
+        )
+        
+        # الفلترة بناءً على المربعات المختارة للتحميل
+        selected_rows = edited_requests_df[edited_requests_df["Select"] == True]
+        
+        st.markdown("---")
+        col_down1, col_down2 = st.columns([7, 3])
+        
+        with col_down1:
+            st.write("#### 💾 Download Selected Requests")
+            if selected_rows.empty:
+                st.info("Select one or more requests from the table above to download them.")
+            else:
+                # نحذف عمود الـ Select قبل التنزيل حتى لا يظهر في الإكسيل
+                csv_data = selected_rows.drop(columns=["Select"]).to_csv(index=False).encode('utf-8-sig')
+                
+                # تسمية الملف بناءً على عدد الطلبات
+                if len(selected_rows) == 1:
+                    v_name = selected_rows.iloc[0]['Vendor Name']
+                    file_name = f"Pricing_Request_{v_name}.csv"
+                    st.success(f"1 Request selected for: **{v_name}**")
+                else:
+                    file_name = "Combined_Pricing_Requests.csv"
+                    st.success(f"**{len(selected_rows)} Requests** selected and combined into one file.")
+                    
+                st.download_button(
+                    label="📥 Download Selected as CSV",
+                    data=csv_data,
+                    file_name=file_name,
+                    mime="text/csv",
+                    type="primary"
+                )
+                
+        with col_down2:
+            st.write("#### 🗑️ Clear Database")
+            st.warning("Delete all requests permanently.")
+            if st.button("Delete All Requests Data", type="secondary"):
+                os.remove("vendor_pricing_requests.csv")
+                st.rerun()
+
     else:
-        st.info("No detailed requests received yet.")
+        st.info("No detailed requests received yet. Wait for vendors to submit.")
