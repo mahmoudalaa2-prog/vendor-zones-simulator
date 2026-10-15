@@ -15,7 +15,8 @@ def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
         return None
     s = polygon_str.strip()
-    s = re.sub(r'polygon\(\(\s*,\s*', 'polygon((', s, flags=re.IGNORECASE) s = re.sub(r',\s*\)\)', '))', s)
+    s = re.sub(r'polygon\(\(\s*,\s*', 'polygon((', s, flags=re.IGNORECASE)
+s = re.sub(r',\s*\)\)', '))', s)
     return s
 
 @st.cache_data
