@@ -53,6 +53,13 @@ def load_data():
 
 df_vendors, gdf_areas = load_data()
 
+# Optimize: Cache the nearby polygons dataframe so we never recalculate it on clicks
+@st.cache_data
+def get_nearby_polygons(lat, lng, radius_deg=0.15):
+    v_point = Point(lng, lat)
+    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
+    return gdf_areas[nearby_mask].copy()
+
 def save_modification_request(vendor_id, vendor_name, zones_list):
     request_data = pd.DataFrame([{
         "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -150,7 +157,7 @@ with tab1:
                 
         st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
 
-# Tab 2: Vendor Portal (Zero-Reload Selection)
+# Tab 2: Vendor Portal (Lightning Fast Map Clicking)
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
     st.info("Enter your Vendor ID to view your store location and configure your delivery coverage areas.")
@@ -168,27 +175,29 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
 
-            # All available zones in database
-            all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
+            # Fetch pre-cached nearby zones (~15km radius)
+            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"])
+            all_available_zones = sorted(portal_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # State initialization for this vendor
+            # Initialize Session State
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
-                st.session_state["saved_zones"] = []
-
-            current_saved = st.session_state["saved_zones"]
+                initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
+                st.session_state["selected_zones"] = list(initial_covered)
+                st.session_state["last_clicked_coord"] = None
+                
+            current_saved = st.session_state["selected_zones"]
 
             st.markdown("---")
             st.subheader(f"🗺️ Live Coverage Map ({len(current_saved)} Zones Selected)")
-            st.caption("🟢 Green: Delivering here | 🔵 Blue: Available nearby zones")
+            st.caption("💡 **Tip:** Click directly on any area on the map to instantly add or remove it!")
 
-            # Display zones near the vendor + any selected zones
-            v_point = Point(v_row["lng"], v_row["lat"])
-            nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.35))
-            selected_mask = gdf_areas["Delivery Location Area Name"].isin(current_saved)
-            portal_display_areas = gdf_areas[nearby_mask | selected_mask].copy()
+            col_l1, col_l2 = st.columns(2)
+            col_l1.markdown("🟢 **Green Areas:** Delivering here")
+            col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
 
-            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
+            # Render Map
+            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
 
             folium.Marker(
                 location=[v_row["lat"], v_row["lng"]],
@@ -207,40 +216,63 @@ with tab2:
                     return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
 
             folium.GeoJson(
-                portal_display_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                 name="Delivery Zones",
                 style_function=vendor_zone_style,
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Toggle: "])
             ).add_to(v_map)
 
-            # Map does NOT return click events to avoid ANY reload while viewing
-            st_folium(v_map, width="100%", height=480, key="portal_map_view", returned_objects=[])
+            # Returned object is ONLY last_clicked to minimize data payload
+            map_data = st_folium(
+                v_map,
+                width="100%",
+                height=520,
+                key=f"vendor_map_{v_id_clean}",
+                returned_objects=["last_clicked"]
+            )
+
+            # MAP CLICK LOGIC
+            if map_data and map_data.get("last_clicked"):
+                click = map_data["last_clicked"]
+                
+                # Only process if this is a NEW click (prevent double loops)
+                if click != st.session_state.get("last_clicked_coord"):
+                    st.session_state["last_clicked_coord"] = click
+                    click_pt = Point(click["lng"], click["lat"])
+                    
+                    matches = portal_areas[portal_areas.geometry.contains(click_pt)]
+                    if not matches.empty:
+                        clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
+                        
+                        if clicked_zone in st.session_state["selected_zones"]:
+                            st.session_state["selected_zones"].remove(clicked_zone)
+                        else:
+                            st.session_state["selected_zones"].append(clicked_zone)
+                            
+                        # Force a clean rerun instantly
+                        st.rerun()
 
             st.markdown("---")
-            st.subheader("📝 Select Delivery Zones (No Reloads)")
-            st.caption("Select as many zones as you want (5, 10, 20+ zones). The page will NOT reload after each choice.")
+            st.subheader("📝 Request Zone Coverage Updates")
 
-            # THE FORM: Absolutely NO reloads while selecting!
-            with st.form("vendor_selection_form"):
-                new_selection = st.multiselect(
-                    "Choose delivery zones (Type zone name to search quickly):",
-                    options=all_available_zones,
-                    default=current_saved,
-                    help="Search and pick any number of zones freely."
-                )
+            # Link Multiselect back to Map
+            def sync_from_multiselect():
+                st.session_state["selected_zones"] = list(st.session_state["sync_multiselect"])
 
-                st.markdown("<br>", unsafe_allow_html=True)
-                save_btn = st.form_submit_button("✅ Save & Update Coverage Map", type="primary", use_container_width=True)
+            st.multiselect(
+                "Selected Service Areas (You can also type to search):",
+                options=all_available_zones,
+                default=current_saved,
+                key="sync_multiselect",
+                on_change=sync_from_multiselect
+            )
 
-                if save_btn:
-                    st.session_state["saved_zones"] = new_selection
-                    save_modification_request(v_id_clean, v_name, new_selection)
-                    st.success(f"🎉 Saved successfully! Map updated with {len(new_selection)} selected zones.")
-                    st.rerun()
-
-            if current_saved:
-                with st.expander(f"📋 View List of Selected Zones ({len(current_saved)})", expanded=True):
-                    st.dataframe(pd.DataFrame({"Selected Delivery Zone": current_saved}), use_container_width=True)
+            if st.button("🚀 Submit Modification Request", type="primary", use_container_width=True):
+                if not current_saved:
+                    st.warning("No zones selected!")
+                else:
+                    save_modification_request(v_id_clean, v_name, current_saved)
+                    st.success(f"✅ Modification request for {len(current_saved)} zones submitted successfully! Pending admin review.")
 
 # Tab 3: Admin Review
 with tab3:
