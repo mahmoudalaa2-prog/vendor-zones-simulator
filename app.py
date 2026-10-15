@@ -9,21 +9,26 @@ import re
 import os
 from datetime import datetime
 
+# ==========================================
+# 1. إعدادات الصفحة الأساسية
+# ==========================================
 st.set_page_config(layout="wide", page_title="نظام إدارة مناطق الفيندورز", page_icon="📍")
 
+# ==========================================
+# 2. دوال معالجة وتجهيز البيانات
+# ==========================================
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
         return None
     s = polygon_str.strip()
-    s = re.sub(r'polygon\(\(\s*,\s*', 'polygon((', s, flags=re.IGNORECASE)
-s = re.sub(r',\s*\)\)', '))', s)
+    s = re.sub(r'polygon\(\(\s*,\s*', 'polygon((', s, flags=re.IGNORECASE) s = re.sub(r',\s*\)\)', '))', s)
     return s
 
 @st.cache_data
 def load_data():
     file_path = 'Dataaa.xlsx'
     
-    # 1. الفيندورز
+    # 1. تحميل الفيندورز
     df_v = pd.read_excel(file_path, sheet_name='Vendor Location')
     coords = df_v['Vendor Attributes Vendor Map Location'].str.split(',', expand=True)
     df_v['lat'] = pd.to_numeric(coords[0], errors='coerce')
@@ -31,7 +36,7 @@ def load_data():
     df_v = df_v.dropna(subset=['lat', 'lng'])
     df_v['Vendor Attributes Vendor Id'] = df_v['Vendor Attributes Vendor Id'].astype(str)
 
-    # 2. المناطق
+    # 2. تحميل المناطق
     df_a = pd.read_excel(file_path, sheet_name='Area')
     df_a['cleaned_wkt'] = df_a['Delivery Location Area Polygon'].apply(clean_wkt)
     
@@ -46,7 +51,7 @@ def load_data():
                 
     gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
     
-    # تبسيط حدود المضلعات لتسريع رسم الخريطة بنسبة 90% بدون التأثير على شكلها
+    # تبسيط حدود المضلعات لتسريع رسم الخريطة بنسبة 90%
     gdf_a['geometry'] = gdf_a['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
     return df_v, gdf_a
@@ -69,8 +74,14 @@ def save_modification_request(vendor_id, vendor_name, original_zones, new_zones)
     else:
         request_data.to_csv(file_name, index=False)
 
+# ==========================================
+# 3. نظام التبويبات (Tabs)
+# ==========================================
 tab1, tab2, tab3 = st.tabs(["🗺️ لوحة المراقبة (الإدارة)", "🛒 بوابة الفيندور", "📥 طلبات التعديل (الإدارة)"])
 
+# ------------------------------------------
+# التبويب الأول: لوحة المراقبة الأساسية
+# ------------------------------------------
 with tab1:
     st.header("لوحة محاكاة المناطق العامة")
     col1, col2 = st.columns([1, 4])
@@ -88,15 +99,14 @@ with tab1:
         m = folium.Map(location=center, zoom_start=10 if selected_city != "الكل" else 6)
         
         if show_zones and not gdf_areas.empty:
-            # إضافة المضلعات باللون الأزرق مع خاصية Popup (عند الضغط) و Tooltip (عند التمرير)
             folium.GeoJson(
                 gdf_areas[['Delivery Location Area Name (Arabic)', 'Delivery Location Area Name', 'geometry']].to_json(),
                 name="مناطق التغطية",
                 style_function=lambda feature: {
-                    'fillColor': '#0055ff',      # لون أزرق التعبئة
-                    'color': '#002266',          # لون الحدود الأزرق الغامق
-                    'weight': 1.5,               # سماكة الحدود
-                    'fillOpacity': 0.3           # الشفافية لتظهر الخريطة أسفلها
+                    'fillColor': '#0055ff',      
+                    'color': '#002266',          
+                    'weight': 1.5,               
+                    'fillOpacity': 0.3           
                 },
                 tooltip=folium.GeoJsonTooltip(
                     fields=['Delivery Location Area Name (Arabic)'],
@@ -120,6 +130,9 @@ with tab1:
                 
         st_folium(m, width="100%", height=600, key="main_map", returned_objects=[])
 
+# ------------------------------------------
+# التبويب الثاني: بوابة الفيندور
+# ------------------------------------------
 with tab2:
     st.header("بوابة الفيندور - إدارة مناطق التغطية")
     st.info("أدخل الـ ID الخاص بك لترى موقعك والمناطق التي تقوم بالتوصيل إليها.")
@@ -145,11 +158,4 @@ with tab2:
             
             v_map = folium.Map(location=[v_row['lat'], v_row['lng']], zoom_start=12)
             folium.Marker(
-                [v_row['lat'], v_row['lng']], popup="موقعك الحالي", icon=folium.Icon(color="green", icon="star")
-            ).add_to(v_map)
-            
-            covered_gdf = gdf_areas[gdf_areas['Delivery Location Area Name (Arabic)'].isin(current_covered_areas)]
-            if not covered_gdf.empty:
-                folium.GeoJson(
-                    covered_gdf[['Delivery Location Area Name (Arabic)', 'geometry']].to_json(),
-                    style_function=lambda x: {'fillColor': '#00ff00', 'color': 'darkgreen', 'weight':
+                [v_row['lat'], v_row['lng']], popup="موقعك الحالي", icon=folium.Icon(color
