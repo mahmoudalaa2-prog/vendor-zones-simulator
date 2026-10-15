@@ -87,10 +87,8 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
     
     file_name = "vendor_pricing_requests.csv"
     if os.path.exists(file_name):
-        # التحقق إذا كان الملف قديماً لا يحتوي الأعمدة الجديدة
         old_df = pd.read_csv(file_name)
         if "Zone" not in old_df.columns:
-            # إذا كان قديماً يتم التخلص منه وبدء ملف جديد
             save_df.to_csv(file_name, index=False)
         else:
             save_df.to_csv(file_name, mode="a", header=False, index=False)
@@ -100,11 +98,81 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (لوحة المراقبة الرئيسية)
 # ==========================================
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
-    st.info("The Admin Map is temporarily hidden to optimize the performance of the Vendor Portal.")
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        st.subheader("Filter Controls")
+        all_cities = ["All"] + sorted(df_vendors["Vendor Attributes Vendor City"].dropna().unique().tolist())
+        selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
+        st.markdown("---")
+        
+        temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["Vendor Attributes Vendor City"] == selected_city]
+        vendor_names = ["All"] + sorted(temp_df["Vendor Attributes Vendor Name (English)"].dropna().unique().tolist())
+        selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
+        vendor_ids = ["All"] + sorted(temp_df["Vendor Attributes Vendor Id"].dropna().unique().tolist())
+        selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
+        chain_ids = ["All"] + sorted(temp_df["Chain Attributes Chain ID"].dropna().unique().tolist())
+        selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
+        st.markdown("---")
+        show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
+        
+        if st.button("Reset Filters", key="reset_btn"):
+            st.session_state.clear()
+            st.rerun()
+            
+    with col2:
+        filtered_v = df_vendors
+        if selected_city != "All":
+            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor City"] == selected_city]
+        if selected_name != "All":
+            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Name (English)"] == selected_name]
+        if selected_v_id != "All":
+            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Id"] == selected_v_id]
+        if selected_chain != "All":
+            filtered_v = filtered_v[filtered_v["Chain Attributes Chain ID"] == selected_chain]
+            
+        if not filtered_v.empty:
+            center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
+            zoom = 14 if (selected_name != "All" or selected_v_id != "All") else 12 if selected_chain != "All" else 11 if selected_city != "All" else 6
+        else:
+            center = [30.0444, 31.2357]
+            zoom = 6
+            
+        m = folium.Map(location=center, zoom_start=zoom)
+        
+        if show_zones and not gdf_areas.empty:
+            folium.GeoJson(
+                gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                name="Delivery Zones",
+                style_function=lambda feature: {
+                    "fillColor": "#0055ff",
+                    "color": "#002266",
+                    "weight": 1.0,
+                    "fillOpacity": 0.15
+                },
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
+            ).add_to(m)
+            
+        if not filtered_v.empty:
+            cluster = MarkerCluster().add_to(m)
+            is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
+            icon_color = "green" if is_searched else "red"
+            icon_shape = "star" if is_searched else "shopping-cart"
+            for _, row in filtered_v.iterrows():
+                popup_html = f"<b>{row['Vendor Attributes Vendor Name (English)']}</b><br><b>Vendor ID:</b> {row['Vendor Attributes Vendor Id']}<br><b>Chain ID:</b> {row['Chain Attributes Chain ID']}<br><b>Chain Name:</b> {row['Chain Attributes Chain Name']}<br><b>City:</b> {row['Vendor Attributes Vendor City']}"
+                folium.Marker(
+                    location=[row['lat'], row['lng']],
+                    popup=folium.Popup(popup_html, max_width=300),
+                    tooltip=row["Vendor Attributes Vendor Name (English)"],
+                    icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
+                ).add_to(cluster)
+                
+        # الخريطة مبرمجة لتعمل كعرض فقط لمنع أي بطء أو إعادة تحميل للصفحة
+        st_folium(m, width="100%", height=650, key="main_map_admin", returned_objects=[])
 
 # ==========================================
 # Tab 2: Vendor Portal
@@ -296,7 +364,6 @@ with tab3:
         try:
             raw_df = pd.read_csv(file_path)
             
-            # حماية لمعالجة الملفات القديمة التي تسبب تعطل النظام
             if "Zone" not in raw_df.columns:
                 st.warning("⚠️ Legacy data format detected. The old database format is incompatible and has been cleared.")
                 os.remove(file_path)
@@ -391,7 +458,7 @@ with tab3:
                         st.rerun()
 
         except Exception as e:
-            st.error("A critical format error occurred with the old database file.")
+            st.error("A critical format error occurred with the database file.")
             if st.button("Force Clear Corrupted Data", type="primary"):
                 os.remove("vendor_pricing_requests.csv")
                 st.rerun()
