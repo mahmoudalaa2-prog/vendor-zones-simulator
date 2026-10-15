@@ -25,7 +25,7 @@ def clean_wkt(polygon_str):
     return re.sub(r',\s*\)\)', '))', re.sub(r'polygon\(\(\s*,\s*', 'polygon((', polygon_str.strip(), flags=re.IGNORECASE))
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0 # نصف قطر الأرض
+    R = 6371.0
     dlat = np.radians(lat2 - lat1)
     dlon = np.radians(lon2 - lon1)
     a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
@@ -58,6 +58,8 @@ def load_data():
     gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
     gdf_a["area_size"] = gdf_a["geometry"].area
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
+    
+    # الترتيب تنازلي (الأكبر أولاً) حتى تُرسم المناطق الكبيرة في الخلفية والصغيرة في الأعلى
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
     centroids = gdf_a.geometry.centroid
@@ -97,14 +99,14 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
 # ==========================================
-# Tab 1: Admin Map (Simplified)
+# Tab 1: Admin Map
 # ==========================================
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
     st.info("The Admin Map is active.")
 
 # ==========================================
-# Tab 2: Vendor Portal (The Perfect Logic)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
@@ -132,13 +134,13 @@ with tab2:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
                 
-                # ms_zones: المناطق في مربع البحث (تتحدث مع النقرات)
-                st.session_state["ms_zones"] = list(initial_covered)
-                # applied_zones: المناطق الملونة على الخريطة (لا تتحدث إلا بضغطة Apply)
+                # ربط صندوق البحث بالمتغير ms_zones_input بشكل مباشر
+                st.session_state["ms_zones_input"] = list(initial_covered)
                 st.session_state["applied_zones"] = list(initial_covered)
-                
                 st.session_state["last_click_id"] = None
                 st.session_state["show_pricing_table"] = False
+
+            current_applied = st.session_state["applied_zones"]
 
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
@@ -156,10 +158,8 @@ with tab2:
                     icon=folium.Icon(color="green", icon="star")
                 ).add_to(v_map)
 
-                applied_set = set(st.session_state["applied_zones"])
+                applied_set = set(current_applied)
 
-                # تلوين المناطق بناءً على applied_zones فقط! 
-                # (لذلك النقرة لن تغير اللون، ولن يتم إعادة تحميل الخريطة من الصفر)
                 def vendor_zone_style(feature):
                     name = feature["properties"]["Delivery Location Area Name"]
                     if name in applied_set:
@@ -174,10 +174,9 @@ with tab2:
                     tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Select: "])
                 ).add_to(v_map)
 
-                # التقاط النقرة
-                map_data = st_folium(v_map, width="100%", height=500, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=["last_clicked"])
+                map_data = st_folium(v_map, width="100%", height=480, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=["last_active_drawing", "last_object_clicked", "last_clicked"])
 
-                # ---------------- معالجة النقرات (بدون Rerun صريح) ----------------
+                # ---------------- معالجة النقرات ----------------
                 if map_data and map_data.get("last_clicked"):
                     click = map_data["last_clicked"]
                     click_sig = f"{click['lat']}_{click['lng']}"
@@ -186,7 +185,8 @@ with tab2:
                         st.session_state["last_click_id"] = click_sig
                         click_pt = Point(click["lng"], click["lat"])
                         
-                        matches = portal_areas[portal_areas.geometry.contains(click_pt)]
+                        # التعديل الهام جداً: الترتيب التصاعدي (الصغير أولاً) لاصطياد المنطقة المحددة الدقيقة
+                        matches = portal_areas[portal_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
                         if matches.empty:
                             dists = portal_areas.geometry.distance(click_pt)
                             if not dists.empty and dists.min() < 0.005:
@@ -195,56 +195,46 @@ with tab2:
                         if not matches.empty:
                             clicked_zone_name = matches.iloc[0]["Delivery Location Area Name"]
                             
-                            # إضافة أو إزالة المنطقة من مربع البحث فقط
-                            if clicked_zone_name in st.session_state["ms_zones"]:
-                                st.session_state["ms_zones"].remove(clicked_zone_name)
+                            # إضافة أو إزالة المنطقة من مربع البحث بشكل مباشر
+                            if clicked_zone_name in st.session_state["ms_zones_input"]:
+                                st.session_state["ms_zones_input"].remove(clicked_zone_name)
                             else:
-                                st.session_state["ms_zones"].append(clicked_zone_name)
+                                st.session_state["ms_zones_input"].append(clicked_zone_name)
                             
                             st.session_state["show_pricing_table"] = False
-                            # الملاحظة هنا: بمجرد تحديث ms_zones، سيتم تحديث مربع البحث في الأسفل تلقائياً 
-                            # لأن Streamlit تقوم بتحديث المتغيرات من الأعلى للأسفل، ولا نحتاج لـ st.rerun المزعج!
+                            st.rerun()
 
             # ---------------- صندوق البحث والأزرار ----------------
             with col_form:
                 st.subheader("📝 Selected Zones")
                 st.caption("Zones you click on the map will instantly appear here.")
 
-                # مزامنة بيانات مربع البحث مع النقرات
-                st.session_state["ms_zones_widget"] = st.session_state["ms_zones"]
-
-                def sync_ms_zones():
-                    st.session_state["ms_zones"] = st.session_state["ms_zones_widget"]
-
                 chosen_zones = st.multiselect(
                     "Service Areas:",
                     options=all_available_zones,
-                    key="ms_zones_widget",
-                    on_change=sync_ms_zones
+                    key="ms_zones_input" # المفتاح الصحيح للتزامن وحل مشكلة الحد الأقصى للمناطق
                 )
 
                 btn_col1, btn_col2 = st.columns([1, 1])
                 
                 with btn_col1:
-                    # زر Apply يطبق الألوان على الخريطة
                     if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
-                        st.session_state["applied_zones"] = st.session_state["ms_zones"].copy()
+                        st.session_state["applied_zones"] = chosen_zones.copy()
                         st.session_state["show_pricing_table"] = False
                         st.rerun()
                         
                 with btn_col2:
-                    # زر Submit يفتح جدول التسعير
                     if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
                         if not st.session_state["applied_zones"]:
                             st.warning("Please select and 'Apply to Map' at least one zone first.")
-                        elif set(st.session_state["applied_zones"]) != set(st.session_state["ms_zones"]):
+                        elif set(st.session_state["applied_zones"]) != set(st.session_state["ms_zones_input"]):
                             st.warning("You have unapplied changes! Please click 'Apply to Map' first.")
                         else:
                             st.session_state["show_pricing_table"] = True
                             st.rerun()
 
             # ==========================================
-            # 4. جدول تحديد المسافات والأسعار (DataGrid)
+            # 4. جدول التسعير والمسافات
             # ==========================================
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
@@ -294,9 +284,6 @@ with tab2:
                         save_detailed_request(v_id_clean, v_name, edited_pricing_df)
                         st.success("🎉 Success! Your zones, delivery times, and fees have been submitted to Admin.")
 
-# ==========================================
-# Tab 3: Admin Review
-# ==========================================
 with tab3:
     st.header("📥 Vendor Pricing & Coverage Requests")
     if os.path.exists("vendor_pricing_requests.csv"):
