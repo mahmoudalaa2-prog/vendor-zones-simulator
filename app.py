@@ -17,7 +17,7 @@ from datetime import datetime
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management", page_icon="📍")
 
 # ==========================================
-# 2. دوال المعالجة والمسافات
+# 2. دوال المعالجة
 # ==========================================
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
@@ -97,83 +97,14 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (Simplified)
 # ==========================================
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        st.subheader("Filter Controls")
-        all_cities = ["All"] + sorted(df_vendors["Vendor Attributes Vendor City"].dropna().unique().tolist())
-        selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
-        st.markdown("---")
-        
-        temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["Vendor Attributes Vendor City"] == selected_city]
-        vendor_names = ["All"] + sorted(temp_df["Vendor Attributes Vendor Name (English)"].dropna().unique().tolist())
-        selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
-        vendor_ids = ["All"] + sorted(temp_df["Vendor Attributes Vendor Id"].dropna().unique().tolist())
-        selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
-        chain_ids = ["All"] + sorted(temp_df["Chain Attributes Chain ID"].dropna().unique().tolist())
-        selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
-        st.markdown("---")
-        show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
-        
-        if st.button("Reset Filters", key="reset_btn"):
-            st.session_state.clear()
-            st.rerun()
-            
-    with col2:
-        filtered_v = df_vendors
-        if selected_city != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor City"] == selected_city]
-        if selected_name != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Name (English)"] == selected_name]
-        if selected_v_id != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Id"] == selected_v_id]
-        if selected_chain != "All":
-            filtered_v = filtered_v[filtered_v["Chain Attributes Chain ID"] == selected_chain]
-            
-        if not filtered_v.empty:
-            center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
-            zoom = 13 if (selected_name != "All" or selected_v_id != "All") else 11 if selected_chain != "All" else 11 if selected_city != "All" else 6
-        else:
-            center = [30.0444, 31.2357]
-            zoom = 6
-            
-        m = folium.Map(location=center, zoom_start=zoom)
-        
-        if show_zones and not gdf_areas.empty:
-            folium.GeoJson(
-                gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
-                name="Delivery Zones",
-                style_function=lambda feature: {
-                    "fillColor": "#0055ff",
-                    "color": "#002266",
-                    "weight": 1.2,
-                    "fillOpacity": 0.25
-                },
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
-            ).add_to(m)
-            
-        if not filtered_v.empty:
-            cluster = MarkerCluster().add_to(m)
-            is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
-            icon_color = "green" if is_searched else "red"
-            icon_shape = "star" if is_searched else "shopping-cart"
-            for _, row in filtered_v.iterrows():
-                popup_html = f"<b>{row['Vendor Attributes Vendor Name (English)']}</b><br><b>Vendor ID:</b> {row['Vendor Attributes Vendor Id']}<br><b>Chain ID:</b> {row['Chain Attributes Chain ID']}<br><b>Chain Name:</b> {row['Chain Attributes Chain Name']}<br><b>City:</b> {row['Vendor Attributes Vendor City']}"
-                folium.Marker(
-                    location=[row['lat'], row['lng']],
-                    popup=folium.Popup(popup_html, max_width=300),
-                    tooltip=row["Vendor Attributes Vendor Name (English)"],
-                    icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
-                ).add_to(cluster)
-                
-        st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
+    st.info("The Admin Map is active.")
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (The Perfect Logic)
 # ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
@@ -196,21 +127,26 @@ with tab2:
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # تهيئة المتغيرات عند الدخول أول مرة
+            # ---------------- تهيئة المتغيرات ----------------
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
-                st.session_state["ms_zones"] = list(initial_covered)    # المربع النصي
-                st.session_state["applied_zones"] = list(initial_covered) # الخريطة الملونة
+                
+                # ms_zones: المناطق في مربع البحث (تتحدث مع النقرات)
+                st.session_state["ms_zones"] = list(initial_covered)
+                # applied_zones: المناطق الملونة على الخريطة (لا تتحدث إلا بضغطة Apply)
+                st.session_state["applied_zones"] = list(initial_covered)
+                
                 st.session_state["last_click_id"] = None
                 st.session_state["show_pricing_table"] = False
 
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
+            # ---------------- رسم الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(st.session_state['applied_zones'])} Zones Applied)")
-                st.caption("Click a zone to automatically add it to the search box on the right!")
+                st.caption("Click a zone to automatically add it to the search box on the right without changing colors.")
                 
                 v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
                 folium.Marker(
@@ -222,7 +158,8 @@ with tab2:
 
                 applied_set = set(st.session_state["applied_zones"])
 
-                # تلوين المناطق المعتمدة (التي تم ضغط Apply عليها فقط)
+                # تلوين المناطق بناءً على applied_zones فقط! 
+                # (لذلك النقرة لن تغير اللون، ولن يتم إعادة تحميل الخريطة من الصفر)
                 def vendor_zone_style(feature):
                     name = feature["properties"]["Delivery Location Area Name"]
                     if name in applied_set:
@@ -230,76 +167,84 @@ with tab2:
                     else:
                         return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
 
-                # تمرير الخصائص لتلتقطها دالة الكليك
                 folium.GeoJson(
                     portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                     name="Delivery Zones",
                     style_function=vendor_zone_style,
-                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Add: "])
+                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Select: "])
                 ).add_to(v_map)
 
                 # التقاط النقرة
-                map_data = st_folium(v_map, width="100%", height=500, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=["last_active_drawing", "last_object_clicked", "last_clicked"])
+                map_data = st_folium(v_map, width="100%", height=500, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=["last_clicked"])
 
-                if map_data:
-                    clicked_zone_name = None
-                    click_sig = None
+                # ---------------- معالجة النقرات (بدون Rerun صريح) ----------------
+                if map_data and map_data.get("last_clicked"):
+                    click = map_data["last_clicked"]
+                    click_sig = f"{click['lat']}_{click['lng']}"
                     
-                    if map_data.get("last_active_drawing") and "properties" in map_data["last_active_drawing"]:
-                        clicked_zone_name = map_data["last_active_drawing"]["properties"].get("Delivery Location Area Name")
-                        click_sig = clicked_zone_name
-                    elif map_data.get("last_object_clicked") and "properties" in map_data["last_object_clicked"]:
-                        clicked_zone_name = map_data["last_object_clicked"]["properties"].get("Delivery Location Area Name")
-                        click_sig = clicked_zone_name
-                    elif map_data.get("last_clicked"):
-                        click = map_data["last_clicked"]
-                        click_sig = f"{click['lat']}_{click['lng']}"
+                    if click_sig != st.session_state.get("last_click_id"):
+                        st.session_state["last_click_id"] = click_sig
                         click_pt = Point(click["lng"], click["lat"])
+                        
                         matches = portal_areas[portal_areas.geometry.contains(click_pt)]
                         if matches.empty:
                             dists = portal_areas.geometry.distance(click_pt)
                             if not dists.empty and dists.min() < 0.005:
                                 matches = portal_areas.loc[[dists.idxmin()]]
+                                
                         if not matches.empty:
                             clicked_zone_name = matches.iloc[0]["Delivery Location Area Name"]
-
-                    # إضافة اسم المنطقة إلى المربع دون تعديل الخريطة
-                    if clicked_zone_name and click_sig != st.session_state.get("last_click_id"):
-                        st.session_state["last_click_id"] = click_sig
-                        
-                        if clicked_zone_name in st.session_state["ms_zones"]:
-                            st.session_state["ms_zones"].remove(clicked_zone_name)
-                        else:
-                            st.session_state["ms_zones"].append(clicked_zone_name)
                             
-                        st.session_state["show_pricing_table"] = False
-                        st.rerun()
+                            # إضافة أو إزالة المنطقة من مربع البحث فقط
+                            if clicked_zone_name in st.session_state["ms_zones"]:
+                                st.session_state["ms_zones"].remove(clicked_zone_name)
+                            else:
+                                st.session_state["ms_zones"].append(clicked_zone_name)
+                            
+                            st.session_state["show_pricing_table"] = False
+                            # الملاحظة هنا: بمجرد تحديث ms_zones، سيتم تحديث مربع البحث في الأسفل تلقائياً 
+                            # لأن Streamlit تقوم بتحديث المتغيرات من الأعلى للأسفل، ولا نحتاج لـ st.rerun المزعج!
 
+            # ---------------- صندوق البحث والأزرار ----------------
             with col_form:
                 st.subheader("📝 Selected Zones")
-                st.caption("Zones you click will appear here without changing map colors.")
+                st.caption("Zones you click on the map will instantly appear here.")
+
+                # مزامنة بيانات مربع البحث مع النقرات
+                st.session_state["ms_zones_widget"] = st.session_state["ms_zones"]
+
+                def sync_ms_zones():
+                    st.session_state["ms_zones"] = st.session_state["ms_zones_widget"]
 
                 chosen_zones = st.multiselect(
                     "Service Areas:",
                     options=all_available_zones,
-                    key="ms_zones"
+                    key="ms_zones_widget",
+                    on_change=sync_ms_zones
                 )
 
-                if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
-                    st.session_state["applied_zones"] = st.session_state["ms_zones"].copy()
-                    st.session_state["show_pricing_table"] = False
-                    st.rerun()
-                    
-                if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
-                    if not st.session_state["applied_zones"]:
-                        st.warning("Please select and 'Apply to Map' at least one zone first.")
-                    elif set(st.session_state["applied_zones"]) != set(st.session_state["ms_zones"]):
-                        st.warning("You have unapplied changes! Please click 'Apply to Map' first.")
-                    else:
-                        st.session_state["show_pricing_table"] = True
+                btn_col1, btn_col2 = st.columns([1, 1])
+                
+                with btn_col1:
+                    # زر Apply يطبق الألوان على الخريطة
+                    if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
+                        st.session_state["applied_zones"] = st.session_state["ms_zones"].copy()
+                        st.session_state["show_pricing_table"] = False
+                        st.rerun()
+                        
+                with btn_col2:
+                    # زر Submit يفتح جدول التسعير
+                    if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
+                        if not st.session_state["applied_zones"]:
+                            st.warning("Please select and 'Apply to Map' at least one zone first.")
+                        elif set(st.session_state["applied_zones"]) != set(st.session_state["ms_zones"]):
+                            st.warning("You have unapplied changes! Please click 'Apply to Map' first.")
+                        else:
+                            st.session_state["show_pricing_table"] = True
+                            st.rerun()
 
             # ==========================================
-            # جدول المسافات والأسعار (DataGrid)
+            # 4. جدول تحديد المسافات والأسعار (DataGrid)
             # ==========================================
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
