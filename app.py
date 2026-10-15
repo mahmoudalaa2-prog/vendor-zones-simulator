@@ -47,26 +47,28 @@ def load_data():
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    # Simplify geometries to optimize browser rendering
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
+    # Simplify geometries aggressively to make map ultra-fast
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.003, preserve_topology=False)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
 
-# Optimize: Cache the nearby polygons dataframe so we never recalculate it on clicks
+# جلب المناطق القريبة بناءً على المسافة التي يحددها المستخدم
 @st.cache_data
-def get_nearby_polygons(lat, lng, radius_deg=0.15):
+def get_nearby_polygons(lat, lng, radius_km):
     v_point = Point(lng, lat)
+    # تحويل الكيلومترات إلى درجات تقريبية (كل 1 درجة تعادل تقريباً 111 كم)
+    radius_deg = radius_km / 111.0
     nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
     return gdf_areas[nearby_mask].copy()
 
-def save_modification_request(vendor_id, vendor_name, zones_list):
+def save_modification_request(vendor_id, vendor_name, original_zones, new_zones):
     request_data = pd.DataFrame([{
         "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Vendor ID": vendor_id,
         "Vendor Name": vendor_name,
-        "Total Zones Count": len(zones_list),
-        "Requested Zones": ", ".join(zones_list),
+        "Original Zones": ", ".join(original_zones),
+        "Requested Zones": ", ".join(new_zones),
         "Status": "Pending"
     }])
     file_name = "vendor_requests.csv"
@@ -116,12 +118,7 @@ with tab1:
             
         if not filtered_v.empty:
             center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
-            if selected_name != "All" or selected_v_id != "All":
-                zoom = 15
-            elif selected_chain != "All":
-                zoom = 12
-            else:
-                zoom = 11 if selected_city != "All" else 6
+            zoom = 13 if (selected_name != "All" or selected_v_id != "All") else 11 if selected_chain != "All" else 11 if selected_city != "All" else 6
         else:
             center = [30.0444, 31.2357]
             zoom = 6
@@ -135,8 +132,8 @@ with tab1:
                 style_function=lambda feature: {
                     "fillColor": "#0055ff",
                     "color": "#002266",
-                    "weight": 1.2,
-                    "fillOpacity": 0.25
+                    "weight": 1.0,
+                    "fillOpacity": 0.20
                 },
                 tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
             ).add_to(m)
@@ -155,9 +152,10 @@ with tab1:
                     icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
                 ).add_to(cluster)
                 
+        # إيقاف إرجاع البيانات في خريطة الإدارة لتسريع الموقع بالكامل
         st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
 
-# Tab 2: Vendor Portal (Lightning Fast Map Clicking)
+# Tab 2: Vendor Portal (Fast Clicking Map)
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
     st.info("Enter your Vendor ID to view your store location and configure your delivery coverage areas.")
@@ -175,11 +173,18 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
 
-            # Fetch pre-cached nearby zones (~15km radius)
-            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"])
+            st.markdown("---")
+            # مؤشر المسافة لجعل الخريطة سريعة جداً عند تحميل مناطق أقل
+            st.subheader("📍 Map Loading Radius")
+            map_radius_km = st.slider(
+                "Adjust how far you want to see zones on the map (Smaller radius = Much faster clicking):",
+                min_value=3, max_value=40, value=6, step=1,
+                help="Decrease this to 5km to make map clicking extremely fast. Increase it if you need to select far areas."
+            )
+
+            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(portal_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # Initialize Session State
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
@@ -196,7 +201,6 @@ with tab2:
             col_l1.markdown("🟢 **Green Areas:** Delivering here")
             col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
 
-            # Render Map
             v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
 
             folium.Marker(
@@ -215,32 +219,33 @@ with tab2:
                 else:
                     return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
 
+            # دمج مضلعات المناطق الثابتة والمختارة لتقليل الضغط على المتصفح
+            selected_mask = gdf_areas["Delivery Location Area Name"].isin(current_saved)
+            display_gdf = pd.concat([portal_areas, gdf_areas[selected_mask]]).drop_duplicates(subset=["Delivery Location Area Name"])
+
             folium.GeoJson(
-                portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                display_gdf[["Delivery Location Area Name", "geometry"]].to_json(),
                 name="Delivery Zones",
                 style_function=vendor_zone_style,
                 tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Toggle: "])
             ).add_to(v_map)
 
-            # Returned object is ONLY last_clicked to minimize data payload
             map_data = st_folium(
                 v_map,
                 width="100%",
                 height=520,
-                key=f"vendor_map_{v_id_clean}",
+                key=f"vendor_map_{v_id_clean}_{map_radius_km}",
                 returned_objects=["last_clicked"]
             )
 
-            # MAP CLICK LOGIC
+            # تسجيل النقرات
             if map_data and map_data.get("last_clicked"):
                 click = map_data["last_clicked"]
-                
-                # Only process if this is a NEW click (prevent double loops)
                 if click != st.session_state.get("last_clicked_coord"):
                     st.session_state["last_clicked_coord"] = click
                     click_pt = Point(click["lng"], click["lat"])
                     
-                    matches = portal_areas[portal_areas.geometry.contains(click_pt)]
+                    matches = display_gdf[display_gdf.geometry.contains(click_pt)]
                     if not matches.empty:
                         clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
                         
@@ -249,19 +254,20 @@ with tab2:
                         else:
                             st.session_state["selected_zones"].append(clicked_zone)
                             
-                        # Force a clean rerun instantly
                         st.rerun()
 
             st.markdown("---")
             st.subheader("📝 Request Zone Coverage Updates")
 
-            # Link Multiselect back to Map
             def sync_from_multiselect():
                 st.session_state["selected_zones"] = list(st.session_state["sync_multiselect"])
 
+            # دمج القائمة لتشمل المناطق التي اختارها من خارج نطاق البحث لتظل ظاهرة
+            all_dropdown_options = sorted(list(set(all_available_zones + current_saved)))
+
             st.multiselect(
                 "Selected Service Areas (You can also type to search):",
-                options=all_available_zones,
+                options=all_dropdown_options,
                 default=current_saved,
                 key="sync_multiselect",
                 on_change=sync_from_multiselect
@@ -271,7 +277,7 @@ with tab2:
                 if not current_saved:
                     st.warning("No zones selected!")
                 else:
-                    save_modification_request(v_id_clean, v_name, current_saved)
+                    save_modification_request(v_id_clean, v_name, [], current_saved)
                     st.success(f"✅ Modification request for {len(current_saved)} zones submitted successfully! Pending admin review.")
 
 # Tab 3: Admin Review
