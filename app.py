@@ -11,14 +11,8 @@ import re
 import os
 from datetime import datetime
 
-# ==========================================
-# 1. إعدادات الصفحة
-# ==========================================
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management", page_icon="📍")
 
-# ==========================================
-# 2. دوال المعالجة
-# ==========================================
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
         return None
@@ -59,13 +53,12 @@ def load_data():
     gdf_a["area_size"] = gdf_a["geometry"].area
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     
-    # الترتيب تنازلي (الأكبر أولاً) حتى تُرسم المناطق الكبيرة في الخلفية والصغيرة في الأعلى
-    gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
-    
     centroids = gdf_a.geometry.centroid
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
+    
+    # تم إيقاف التبسيط القوي هنا للحفاظ على دقة المناطق الصغيرة جداً
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
@@ -98,16 +91,10 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
-# ==========================================
-# Tab 1: Admin Map
-# ==========================================
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
     st.info("The Admin Map is active.")
 
-# ==========================================
-# Tab 2: Vendor Portal
-# ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
     st.info("Enter your Vendor ID to view your store location and configure your delivery zones.")
@@ -129,26 +116,21 @@ with tab2:
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # ---------------- تهيئة المتغيرات ----------------
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
                 initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
-                
-                # ربط صندوق البحث بالمتغير ms_zones_input بشكل مباشر
-                st.session_state["ms_zones_input"] = list(initial_covered)
+                st.session_state["search_box_zones"] = list(initial_covered)
                 st.session_state["applied_zones"] = list(initial_covered)
-                st.session_state["last_click_id"] = None
-                st.session_state["show_pricing_table"] = False
+                st.session_state["last_click_event"] = None
 
             current_applied = st.session_state["applied_zones"]
 
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
-            # ---------------- رسم الخريطة ----------------
             with col_map:
-                st.subheader(f"🗺️ Map ({len(st.session_state['applied_zones'])} Zones Applied)")
-                st.caption("Click a zone to automatically add it to the search box on the right without changing colors.")
+                st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
+                st.caption("Click any zone. It will instantly appear in the search box without changing colors.")
                 
                 v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
                 folium.Marker(
@@ -171,55 +153,55 @@ with tab2:
                     portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                     name="Delivery Zones",
                     style_function=vendor_zone_style,
-                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Select: "])
+                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Add: "])
                 ).add_to(v_map)
 
-                map_data = st_folium(v_map, width="100%", height=480, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=["last_active_drawing", "last_object_clicked", "last_clicked"])
+                # تفعيل الالتقاط باستخدام الكائن نفسه لضمان دقة 100% في تحديد المربع
+                map_data = st_folium(v_map, width="100%", height=500, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=["last_object_clicked"])
 
-                # ---------------- معالجة النقرات ----------------
-                if map_data and map_data.get("last_clicked"):
-                    click = map_data["last_clicked"]
-                    click_sig = f"{click['lat']}_{click['lng']}"
-                    
-                    if click_sig != st.session_state.get("last_click_id"):
-                        st.session_state["last_click_id"] = click_sig
-                        click_pt = Point(click["lng"], click["lat"])
+                # معالجة النقرة لإضافتها لصندوق البحث
+                if map_data and map_data.get("last_object_clicked"):
+                    click_data = map_data["last_object_clicked"]
+                    # نقرأ اسم المنطقة مباشرة من الـ GeoJson الذي ضغط عليه الماوس
+                    if "properties" in click_data:
+                        clicked_zone_name = click_data["properties"].get("Delivery Location Area Name")
                         
-                        # التعديل الهام جداً: الترتيب التصاعدي (الصغير أولاً) لاصطياد المنطقة المحددة الدقيقة
-                        matches = portal_areas[portal_areas.geometry.contains(click_pt)].sort_values(by="area_size", ascending=True)
-                        if matches.empty:
-                            dists = portal_areas.geometry.distance(click_pt)
-                            if not dists.empty and dists.min() < 0.005:
-                                matches = portal_areas.loc[[dists.idxmin()]]
-                                
-                        if not matches.empty:
-                            clicked_zone_name = matches.iloc[0]["Delivery Location Area Name"]
+                        # نستخدم الاسم لتفادي التكرار
+                        if clicked_zone_name and clicked_zone_name != st.session_state.get("last_click_event"):
+                            st.session_state["last_click_event"] = clicked_zone_name
                             
-                            # إضافة أو إزالة المنطقة من مربع البحث بشكل مباشر
-                            if clicked_zone_name in st.session_state["ms_zones_input"]:
-                                st.session_state["ms_zones_input"].remove(clicked_zone_name)
+                            # تحديث القائمة فوراً
+                            current_list = st.session_state["search_box_zones"].copy()
+                            if clicked_zone_name in current_list:
+                                current_list.remove(clicked_zone_name)
                             else:
-                                st.session_state["ms_zones_input"].append(clicked_zone_name)
-                            
+                                current_list.append(clicked_zone_name)
+                                
+                            st.session_state["search_box_zones"] = current_list
                             st.session_state["show_pricing_table"] = False
                             st.rerun()
 
-            # ---------------- صندوق البحث والأزرار ----------------
             with col_form:
                 st.subheader("📝 Selected Zones")
-                st.caption("Zones you click on the map will instantly appear here.")
+                st.caption("Zones you click on the map will appear here. Add as many as you want.")
 
+                # صندوق البحث
                 chosen_zones = st.multiselect(
                     "Service Areas:",
                     options=all_available_zones,
-                    key="ms_zones_input" # المفتاح الصحيح للتزامن وحل مشكلة الحد الأقصى للمناطق
+                    default=st.session_state["search_box_zones"],
+                    key="multiselect_widget"
                 )
+                
+                # ربط التعديل اليدوي بالـ State
+                if chosen_zones != st.session_state["search_box_zones"]:
+                    st.session_state["search_box_zones"] = chosen_zones
 
                 btn_col1, btn_col2 = st.columns([1, 1])
                 
                 with btn_col1:
                     if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
-                        st.session_state["applied_zones"] = chosen_zones.copy()
+                        st.session_state["applied_zones"] = st.session_state["search_box_zones"].copy()
                         st.session_state["show_pricing_table"] = False
                         st.rerun()
                         
@@ -227,15 +209,13 @@ with tab2:
                     if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
                         if not st.session_state["applied_zones"]:
                             st.warning("Please select and 'Apply to Map' at least one zone first.")
-                        elif set(st.session_state["applied_zones"]) != set(st.session_state["ms_zones_input"]):
+                        elif set(st.session_state["applied_zones"]) != set(st.session_state["search_box_zones"]):
                             st.warning("You have unapplied changes! Please click 'Apply to Map' first.")
                         else:
                             st.session_state["show_pricing_table"] = True
                             st.rerun()
 
-            # ==========================================
-            # 4. جدول التسعير والمسافات
-            # ==========================================
+            # Pricing Table
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
                 st.subheader("💰 Set Delivery Pricing & Time")
