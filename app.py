@@ -6,7 +6,6 @@ from shapely.geometry import Point
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
-import numpy as np
 import re
 import os
 from datetime import datetime
@@ -19,14 +18,6 @@ def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
         return None
     return re.sub(r',\s*\)\)', '))', re.sub(r'polygon\(\(\s*,\s*', 'polygon((', polygon_str.strip(), flags=re.IGNORECASE))
-
-def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = np.radians(lat2 - lat1)
-    dlon = np.radians(lon2 - lon1)
-    a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    return R * c
 
 @st.cache_data
 def load_data():
@@ -56,22 +47,19 @@ def load_data():
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    centroids = gdf_a.geometry.centroid
-    gdf_a["centroid_lat"] = centroids.y
-    gdf_a["centroid_lng"] = centroids.x
-
+    # Simplify geometries to optimize browser rendering
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
 
-def save_modification_request(vendor_id, vendor_name, original_zones, new_zones):
+def save_modification_request(vendor_id, vendor_name, zones_list):
     request_data = pd.DataFrame([{
         "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Vendor ID": vendor_id,
         "Vendor Name": vendor_name,
-        "Original Zones": ", ".join(original_zones),
-        "Requested Zones": ", ".join(new_zones),
+        "Total Zones Count": len(zones_list),
+        "Requested Zones": ", ".join(zones_list),
         "Status": "Pending"
     }])
     file_name = "vendor_requests.csv"
@@ -162,10 +150,10 @@ with tab1:
                 
         st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
 
-# Tab 2: Vendor Portal (Zero-Lag Batch Selection)
+# Tab 2: Vendor Portal (Zero-Reload Selection)
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
-    st.info("Enter your Vendor ID to view your store location and configure delivery coverage.")
+    st.info("Enter your Vendor ID to view your store location and configure your delivery coverage areas.")
     vendor_input_id = st.text_input("Enter Vendor ID:")
     
     if vendor_input_id:
@@ -180,131 +168,79 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
 
-            # حساب المسافات لجميع المناطق بالنسبة لموقع هذا الفيندور
-            gdf_nearby = gdf_areas.copy()
-            gdf_nearby["dist_km"] = haversine_km(
-                v_row["lat"], v_row["lng"],
-                gdf_nearby["centroid_lat"], gdf_nearby["centroid_lng"]
-            ).round(1)
-            
-            # ترتيب المناطق الأقرب أولاً في نطاق 20 كم
-            gdf_nearby = gdf_nearby[gdf_nearby["dist_km"] <= 20.0].sort_values("dist_km")
-            
-            # إرفاق المسافة باسم المنطقة لتسهيل الاختيار
-            gdf_nearby["display_name"] = gdf_nearby["Delivery Location Area Name"] + " (" + gdf_nearby["dist_km"].astype(str) + " km)"
-            display_to_raw = dict(zip(gdf_nearby["display_name"], gdf_nearby["Delivery Location Area Name"]))
-            raw_to_display = dict(zip(gdf_nearby["Delivery Location Area Name"], gdf_nearby["display_name"]))
-            
-            all_display_options = gdf_nearby["display_name"].tolist()
+            # All available zones in database
+            all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # تهيئة الحالة
-            if "active_vendor_id" not in st.session_state or st.session_state["active_vendor_id"] != v_id_clean:
-                st.session_state["active_vendor_id"] = v_id_clean
-                initial_covered = gdf_nearby["Delivery Location Area Name"].head(3).tolist()
-                st.session_state["applied_zones"] = list(initial_covered)
-                st.session_state["form_default_display"] = [raw_to_display[z] for z in initial_covered if z in raw_to_display]
+            # State initialization for this vendor
+            if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
+                st.session_state["vendor_portal_id"] = v_id_clean
+                st.session_state["saved_zones"] = []
+
+            current_saved = st.session_state["saved_zones"]
 
             st.markdown("---")
-            st.subheader("⚡ 1-Click Quick Radius Selection")
-            st.caption("Click any button below to instantly pre-select all zones within that radius:")
+            st.subheader(f"🗺️ Live Coverage Map ({len(current_saved)} Zones Selected)")
+            st.caption("🟢 Green: Delivering here | 🔵 Blue: Available nearby zones")
 
-            r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns(5)
-            
-            if r_col1.button("🎯 Cover 3 km"):
-                zones = gdf_nearby[gdf_nearby["dist_km"] <= 3.0]["Delivery Location Area Name"].tolist()
-                st.session_state["applied_zones"] = zones
-                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
-                st.rerun()
+            # Display zones near the vendor + any selected zones
+            v_point = Point(v_row["lng"], v_row["lat"])
+            nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.35))
+            selected_mask = gdf_areas["Delivery Location Area Name"].isin(current_saved)
+            portal_display_areas = gdf_areas[nearby_mask | selected_mask].copy()
 
-            if r_col2.button("🎯 Cover 5 km"):
-                zones = gdf_nearby[gdf_nearby["dist_km"] <= 5.0]["Delivery Location Area Name"].tolist()
-                st.session_state["applied_zones"] = zones
-                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
-                st.rerun()
+            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
 
-            if r_col3.button("🎯 Cover 8 km"):
-                zones = gdf_nearby[gdf_nearby["dist_km"] <= 8.0]["Delivery Location Area Name"].tolist()
-                st.session_state["applied_zones"] = zones
-                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
-                st.rerun()
+            folium.Marker(
+                location=[v_row["lat"], v_row["lng"]],
+                popup=f"<b>{v_name}</b><br>Store Location",
+                tooltip=v_name,
+                icon=folium.Icon(color="green", icon="star")
+            ).add_to(v_map)
 
-            if r_col4.button("🎯 Cover 12 km"):
-                zones = gdf_nearby[gdf_nearby["dist_km"] <= 12.0]["Delivery Location Area Name"].tolist()
-                st.session_state["applied_zones"] = zones
-                st.session_state["form_default_display"] = [raw_to_display[z] for z in zones if z in raw_to_display]
-                st.rerun()
+            current_saved_set = set(current_saved)
 
-            if r_col5.button("❌ Clear All"):
-                st.session_state["applied_zones"] = []
-                st.session_state["form_default_display"] = []
-                st.rerun()
+            def vendor_zone_style(feature):
+                name = feature["properties"]["Delivery Location Area Name"]
+                if name in current_saved_set:
+                    return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
+                else:
+                    return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
+
+            folium.GeoJson(
+                portal_display_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                name="Delivery Zones",
+                style_function=vendor_zone_style,
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
+            ).add_to(v_map)
+
+            # Map does NOT return click events to avoid ANY reload while viewing
+            st_folium(v_map, width="100%", height=480, key="portal_map_view", returned_objects=[])
 
             st.markdown("---")
+            st.subheader("📝 Select Delivery Zones (No Reloads)")
+            st.caption("Select as many zones as you want (5, 10, 20+ zones). The page will NOT reload after each choice.")
 
-            col_map_side, col_form_side = st.columns([1, 1])
+            # THE FORM: Absolutely NO reloads while selecting!
+            with st.form("vendor_selection_form"):
+                new_selection = st.multiselect(
+                    "Choose delivery zones (Type zone name to search quickly):",
+                    options=all_available_zones,
+                    default=current_saved,
+                    help="Search and pick any number of zones freely."
+                )
 
-            with col_map_side:
-                st.subheader(f"🗺️ Current Coverage Map ({len(st.session_state['applied_zones'])} Zones)")
-                st.caption("🟢 Green: Delivering here | 🔵 Blue: Available nearby")
+                st.markdown("<br>", unsafe_allow_html=True)
+                save_btn = st.form_submit_button("✅ Save & Update Coverage Map", type="primary", use_container_width=True)
 
-                v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
+                if save_btn:
+                    st.session_state["saved_zones"] = new_selection
+                    save_modification_request(v_id_clean, v_name, new_selection)
+                    st.success(f"🎉 Saved successfully! Map updated with {len(new_selection)} selected zones.")
+                    st.rerun()
 
-                folium.Marker(
-                    location=[v_row["lat"], v_row["lng"]],
-                    popup=f"<b>{v_name}</b><br>Store Location",
-                    tooltip=v_name,
-                    icon=folium.Icon(color="green", icon="star")
-                ).add_to(v_map)
-
-                applied_set = set(st.session_state["applied_zones"])
-
-                def vendor_zone_style(feature):
-                    name = feature["properties"]["Delivery Location Area Name"]
-                    if name in applied_set:
-                        return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
-                    else:
-                        return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
-
-                folium.GeoJson(
-                    gdf_nearby[["Delivery Location Area Name", "geometry"]].to_json(),
-                    name="Delivery Zones",
-                    style_function=vendor_zone_style,
-                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
-                ).add_to(v_map)
-
-                st_folium(v_map, width="100%", height=480, key="portal_map_view", returned_objects=[])
-
-            with col_form_side:
-                st.subheader("📝 Select Delivery Zones")
-                st.caption("Pick or remove as many zones as you want. Nothing reloads until you click Apply!")
-
-                # الاستمارة التي تمنع أي ريلود أثناء الاختيار
-                with st.form("vendor_coverage_batch_form"):
-                    selected_display_zones = st.multiselect(
-                        "Delivery Zones (Sorted by distance from nearest to farthest):",
-                        options=all_display_options,
-                        default=st.session_state.get("form_default_display", [])
-                    )
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    submit_btn = st.form_submit_button("✅ Apply Selection & Submit Changes", type="primary", use_container_width=True)
-
-                    if submit_btn:
-                        chosen_raw_names = [display_to_raw[d] for d in selected_display_zones if d in display_to_raw]
-                        st.session_state["applied_zones"] = chosen_raw_names
-                        st.session_state["form_default_display"] = selected_display_zones
-                        
-                        save_modification_request(v_id_clean, v_name, [], chosen_raw_names)
-                        st.success(f"🎉 Success! Applied {len(chosen_raw_names)} zones to map & submitted to Admin.")
-                        st.rerun()
-
-            # عرض قائمة ملخصة للمناطق المختارة
-            if st.session_state["applied_zones"]:
-                with st.expander("📄 View Full List of Selected Zones", expanded=False):
-                    summary_df = pd.DataFrame({
-                        "Selected Zone": st.session_state["applied_zones"]
-                    })
-                    st.dataframe(summary_df, use_container_width=True)
+            if current_saved:
+                with st.expander(f"📋 View List of Selected Zones ({len(current_saved)})", expanded=True):
+                    st.dataframe(pd.DataFrame({"Selected Delivery Zone": current_saved}), use_container_width=True)
 
 # Tab 3: Admin Review
 with tab3:
