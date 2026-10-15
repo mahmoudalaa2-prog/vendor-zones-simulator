@@ -6,18 +6,31 @@ from shapely.geometry import Point
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
+import numpy as np
 import re
 import os
 from datetime import datetime
 
-# 1. Page Configuration
+# ==========================================
+# 1. إعدادات الصفحة
+# ==========================================
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management System", page_icon="📍")
 
-# 2. Helper Functions
+# ==========================================
+# 2. دوال المعالجة
+# ==========================================
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
         return None
     return re.sub(r',\s*\)\)', '))', re.sub(r'polygon\(\(\s*,\s*', 'polygon((', polygon_str.strip(), flags=re.IGNORECASE))
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0 # نصف قطر الأرض بالكيلومتر
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return R * c
 
 @st.cache_data
 def load_data():
@@ -47,113 +60,59 @@ def load_data():
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    # تبسيط المضلعات لتسريع العرض التفاعلي
+    # حساب مراكز المناطق لحساب المسافات لاحقاً
+    centroids = gdf_a.geometry.centroid
+    gdf_a["centroid_lat"] = centroids.y
+    gdf_a["centroid_lng"] = centroids.x
+
+    # تبسيط المضلعات لتسريع الخريطة
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
 
-def save_modification_request(vendor_id, vendor_name, zones_list):
+@st.cache_data
+def get_nearby_polygons(lat, lng, radius_km):
+    v_point = Point(lng, lat)
+    radius_deg = radius_km / 111.0
+    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
+    return gdf_areas[nearby_mask].copy()
+
+def save_detailed_request(vendor_id, vendor_name, edited_df):
+    # تحويل الجدول لنص مقروء
+    details = []
+    for _, row in edited_df.iterrows():
+        details.append(f"{row['Zone']} (Dist: {row['Distance (km)']}km | Time: {row['Delivery Time']} | Fees: {row['Delivery Fees']})")
+    
     request_data = pd.DataFrame([{
         "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Vendor ID": vendor_id,
         "Vendor Name": vendor_name,
-        "Total Zones Count": len(zones_list),
-        "Requested Zones": ", ".join(zones_list),
+        "Total Zones Count": len(edited_df),
+        "Details & Pricing": " \n ".join(details),
         "Status": "Pending"
     }])
-    file_name = "vendor_requests.csv"
+    
+    file_name = "vendor_pricing_requests.csv"
     if os.path.exists(file_name):
         request_data.to_csv(file_name, mode="a", header=False, index=False)
     else:
         request_data.to_csv(file_name, index=False)
 
+# ==========================================
+# 3. واجهة المستخدم والتطبيقات
+# ==========================================
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
-# Tab 1: Overview Map
+# ----------------- Tab 1: Admin -----------------
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        st.subheader("Filter Controls")
-        all_cities = ["All"] + sorted(df_vendors["Vendor Attributes Vendor City"].dropna().unique().tolist())
-        selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
-        st.markdown("---")
-        st.write("**Vendor Search Options:**")
-        
-        temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["Vendor Attributes Vendor City"] == selected_city]
-        vendor_names = ["All"] + sorted(temp_df["Vendor Attributes Vendor Name (English)"].dropna().unique().tolist())
-        selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
-        vendor_ids = ["All"] + sorted(temp_df["Vendor Attributes Vendor Id"].dropna().unique().tolist())
-        selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
-        chain_ids = ["All"] + sorted(temp_df["Chain Attributes Chain ID"].dropna().unique().tolist())
-        selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
-        st.markdown("---")
-        show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
-        
-        if st.button("Reset Filters", key="reset_btn"):
-            st.session_state.clear()
-            st.rerun()
-            
-    with col2:
-        filtered_v = df_vendors
-        if selected_city != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor City"] == selected_city]
-        if selected_name != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Name (English)"] == selected_name]
-        if selected_v_id != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Id"] == selected_v_id]
-        if selected_chain != "All":
-            filtered_v = filtered_v[filtered_v["Chain Attributes Chain ID"] == selected_chain]
-            
-        if not filtered_v.empty:
-            center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
-            if selected_name != "All" or selected_v_id != "All":
-                zoom = 15
-            elif selected_chain != "All":
-                zoom = 12
-            else:
-                zoom = 11 if selected_city != "All" else 6
-        else:
-            center = [30.0444, 31.2357]
-            zoom = 6
-            
-        m = folium.Map(location=center, zoom_start=zoom)
-        
-        if show_zones and not gdf_areas.empty:
-            folium.GeoJson(
-                gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
-                name="Delivery Zones",
-                style_function=lambda feature: {
-                    "fillColor": "#0055ff",
-                    "color": "#002266",
-                    "weight": 1.2,
-                    "fillOpacity": 0.25
-                },
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
-            ).add_to(m)
-            
-        if not filtered_v.empty:
-            cluster = MarkerCluster().add_to(m)
-            is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
-            icon_color = "green" if is_searched else "red"
-            icon_shape = "star" if is_searched else "shopping-cart"
-            for _, row in filtered_v.iterrows():
-                popup_html = f"<b>{row['Vendor Attributes Vendor Name (English)']}</b><br><b>Vendor ID:</b> {row['Vendor Attributes Vendor Id']}<br><b>Chain ID:</b> {row['Chain Attributes Chain ID']}<br><b>Chain Name:</b> {row['Chain Attributes Chain Name']}<br><b>City:</b> {row['Vendor Attributes Vendor City']}"
-                folium.Marker(
-                    location=[row['lat'], row['lng']],
-                    popup=folium.Popup(popup_html, max_width=300),
-                    tooltip=row["Vendor Attributes Vendor Name (English)"],
-                    icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
-                ).add_to(cluster)
-                
-        st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
+    st.info("The Admin Map is hidden temporarily to focus on the Vendor Portal functionality.")
 
-# Tab 2: Vendor Portal
+# ----------------- Tab 2: Vendor Portal -----------------
 with tab2:
-    st.header("Vendor Portal - Coverage Zones Management")
-    st.info("Enter your Vendor ID to view your store location and configure your delivery coverage areas.")
+    st.header("Vendor Portal - Coverage & Pricing Management")
+    st.info("Enter your Vendor ID to view your store location and configure your delivery zones.")
     vendor_input_id = st.text_input("Enter Vendor ID:")
     
     if vendor_input_id:
@@ -168,29 +127,41 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
 
+            st.markdown("---")
+            st.subheader("📍 Map View Radius")
+            map_radius_km = st.slider(
+                "Adjust how far you want to see zones around your store:",
+                min_value=3, max_value=40, value=10, step=1
+            )
+
+            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
-            # State initialization
+            # ================== تهيئة المتغيرات (Session State) ==================
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
-                st.session_state["active_zones"] = []
-                st.session_state["staged_selection"] = []
+                initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
+                
+                # ms_zones: المناطق التي تظهر في مربع البحث (تتغير بالضغط على الخريطة)
+                st.session_state["ms_zones"] = list(initial_covered)
+                # applied_zones: المناطق التي تلون الخريطة (لا تتغير إلا بضغط Apply)
+                st.session_state["applied_zones"] = list(initial_covered)
+                
+                st.session_state["last_clicked_coord"] = None
+                st.session_state["show_pricing_table"] = False
+
+            current_applied = st.session_state["applied_zones"]
 
             st.markdown("---")
-            st.subheader(f"🗺️ Coverage Map ({len(st.session_state['active_zones'])} Zones Applied)")
-            st.caption("💡 **Tip:** Click on any zone on the map to view its name and copy it to clipboard with 1 click!")
+            st.subheader(f"🗺️ Live Coverage Map ({len(current_applied)} Zones Applied)")
+            st.caption("💡 **Tip:** Click on any zone to add it to your selection box below. It will NOT change color until you click 'Apply'.")
 
             col_l1, col_l2 = st.columns(2)
-            col_l1.markdown("🟢 **Green Areas:** Applied & Verified (Delivering here)")
+            col_l1.markdown("🟢 **Green Areas:** Applied Zones")
             col_l2.markdown("🔵 **Blue Areas:** Available nearby zones")
 
-            # عرض المضلعات المحيطة بالفيندور + أي مناطق مختارة
-            v_point = Point(v_row["lng"], v_row["lat"])
-            nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(0.30))
-            active_mask = gdf_areas["Delivery Location Area Name"].isin(st.session_state["active_zones"])
-            portal_display_areas = gdf_areas[nearby_mask | active_mask].copy()
-
-            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=12)
+            # --- بناء الخريطة بناءً على applied_zones المعتمدة فقط ---
+            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
 
             folium.Marker(
                 location=[v_row["lat"], v_row["lng"]],
@@ -199,107 +170,136 @@ with tab2:
                 icon=folium.Icon(color="green", icon="star")
             ).add_to(v_map)
 
-            active_set = set(st.session_state["active_zones"])
+            applied_set = set(current_applied)
 
             def vendor_zone_style(feature):
                 name = feature["properties"]["Delivery Location Area Name"]
-                if name in active_set:
+                if name in applied_set:
                     return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
                 else:
                     return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
 
             folium.GeoJson(
-                portal_display_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                 name="Delivery Zones",
                 style_function=vendor_zone_style,
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "]),
-                popup=folium.GeoJsonPopup(fields=["Delivery Location Area Name"], aliases=["Zone Name: "])
+                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Select: "])
             ).add_to(v_map)
 
-            # كود جافاسكريبت لنسخ اسم المنطقة تلقائياً للحافظة عند فتح النافذة المنبثقة
-            copy_script = """
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                var observer = new MutationObserver(function(mutations) {
-                    mutations.forEach(function(mutation) {
-                        mutation.addedNodes.forEach(function(node) {
-                            if (node.classList && node.classList.contains('leaflet-popup')) {
-                                var content = node.querySelector('.leaflet-popup-content');
-                                if (content && !content.querySelector('.copy-btn')) {
-                                    var td = content.querySelector('td') || content;
-                                    var zoneName = td.innerText.replace('Zone Name:', '').trim();
-                                    
-                                    try {
-                                        navigator.clipboard.writeText(zoneName);
-                                    } catch(e) {}
-                                    
-                                    var btn = document.createElement('button');
-                                    btn.className = 'copy-btn';
-                                    btn.innerHTML = '📋 Click to Copy: ' + zoneName;
-                                    btn.style = 'margin-top:8px; padding:6px 12px; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer; width:100%; font-weight:bold; font-size:12px;';
-                                    btn.onclick = function() {
-                                        navigator.clipboard.writeText(zoneName);
-                                        btn.innerHTML = '✅ Copied to Clipboard!';
-                                        setTimeout(function(){ btn.innerHTML = '📋 Click to Copy: ' + zoneName; }, 1800);
-                                    };
-                                    content.appendChild(btn);
-                                }
-                            }
-                        });
-                    });
-                });
-                observer.observe(document.body, { childList: true, subtree: true });
-            });
-            </script>
-            """
-            v_map.get_root().html.add_child(folium.Element(copy_script))
+            # تفعيل التقاط النقرات
+            map_data = st_folium(v_map, width="100%", height=480, key=f"vendor_map_{v_id_clean}_{map_radius_km}", returned_objects=["last_clicked"])
 
-            # returned_objects=[] يجعل الخريطة تعمل بنعومة كاملة وبدون أي إعادة تحميل عند النقر
-            st_folium(v_map, width="100%", height=480, key="portal_map_view", returned_objects=[])
+            # معالجة النقرات (تضاف للصندوق ms_zones ولا تؤثر على الخريطة applied_zones)
+            if map_data and map_data.get("last_clicked"):
+                click = map_data["last_clicked"]
+                if click != st.session_state.get("last_clicked_coord"):
+                    st.session_state["last_clicked_coord"] = click
+                    click_pt = Point(click["lng"], click["lat"])
+                    
+                    matches = portal_areas[portal_areas.geometry.contains(click_pt)]
+                    if not matches.empty:
+                        clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
+                        
+                        # إضافة أو إزالة من مربع البحث فقط
+                        if clicked_zone in st.session_state["ms_zones"]:
+                            st.session_state["ms_zones"].remove(clicked_zone)
+                        else:
+                            st.session_state["ms_zones"].append(clicked_zone)
+                            
+                        # إغلاق جدول التسعير إذا تم تعديل الاختيارات
+                        st.session_state["show_pricing_table"] = False
+                        st.rerun()
 
             st.markdown("---")
-            st.subheader("📝 Selected Delivery Zones")
-            st.caption("Paste or search for the zone names below. Use **Apply** to preview them in Green on the map, then **Submit** to finalize.")
-
+            st.subheader("📝 Selected Service Areas")
+            
+            # صندوق البحث (مرتبط بـ ms_zones)
             chosen_zones = st.multiselect(
-                "Delivery Zones Selection:",
+                "Click on the map or type to add zones to your list:",
                 options=all_available_zones,
-                default=st.session_state.get("staged_selection", st.session_state["active_zones"]),
-                key="vendor_multiselect_box"
+                key="ms_zones" # التزامن التلقائي مع الـ Session State
             )
 
-            # زرا Apply و Submit جنباً إلى جنب
+            # أزرار التحكم
             btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
-            
             with btn_col1:
-                apply_clicked = st.button("👁️ Apply (Preview on Map)", type="secondary", use_container_width=True)
-                
-            with btn_col2:
-                submit_clicked = st.button("🚀 Submit to Admin", type="primary", use_container_width=True)
-
-            if apply_clicked:
-                st.session_state["active_zones"] = chosen_zones
-                st.session_state["staged_selection"] = chosen_zones
-                st.toast(f"Updated! {len(chosen_zones)} zones are now highlighted in Green on the map.", icon="🟢")
-                st.rerun()
-
-            if submit_clicked:
-                if not chosen_zones:
-                    st.warning("Please select at least one zone before submitting.")
-                else:
-                    st.session_state["active_zones"] = chosen_zones
-                    st.session_state["staged_selection"] = chosen_zones
-                    save_modification_request(v_id_clean, v_name, chosen_zones)
-                    st.success(f"🎉 Success! Request for {len(chosen_zones)} zones submitted to Admin and saved.")
+                if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
+                    # تطبيق الاختيارات على الخريطة
+                    st.session_state["applied_zones"] = st.session_state["ms_zones"].copy()
+                    st.session_state["show_pricing_table"] = False
                     st.rerun()
+                    
+            with btn_col2:
+                if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
+                    if not st.session_state["applied_zones"]:
+                        st.warning("Please select and Apply at least one zone first.")
+                    else:
+                        st.session_state["show_pricing_table"] = True
 
-# Tab 3: Admin Review
+            # ==========================================
+            # 4. جدول تحديد المسافات والأسعار (Data Editor)
+            # ==========================================
+            if st.session_state.get("show_pricing_table", False):
+                st.markdown("---")
+                st.subheader("💰 Set Delivery Pricing & Time")
+                st.info("Please fill in the estimated delivery time and fees for each selected zone based on the distance.")
+
+                # بناء جدول البيانات للمناطق المعتمدة (applied_zones)
+                current_applied_hash = ",".join(sorted(st.session_state["applied_zones"]))
+                
+                # إذا تغيرت المناطق، نعيد تهيئة الجدول
+                if st.session_state.get("pricing_hash") != current_applied_hash:
+                    pricing_data = []
+                    for zone in st.session_state["applied_zones"]:
+                        zone_row = gdf_areas[gdf_areas["Delivery Location Area Name"] == zone]
+                        if not zone_row.empty:
+                            z_lat = zone_row.iloc[0]["centroid_lat"]
+                            z_lng = zone_row.iloc[0]["centroid_lng"]
+                            dist = haversine_km(v_row["lat"], v_row["lng"], z_lat, z_lng)
+                        else:
+                            dist = 0.0
+                            
+                        pricing_data.append({
+                            "Zone": zone,
+                            "Distance (km)": round(dist, 1),
+                            "Delivery Time": "",   # خانة فارغة للوقت
+                            "Delivery Fees": None  # خانة فارغة للسعر
+                        })
+                    
+                    # حفظ الجدول في الـ State ليحتفظ بتعديلات الفيندور
+                    st.session_state["pricing_df"] = pd.DataFrame(pricing_data)
+                    st.session_state["pricing_hash"] = current_applied_hash
+
+                # عرض الجدول القابل للتعديل
+                edited_pricing_df = st.data_editor(
+                    st.session_state["pricing_df"],
+                    column_config={
+                        "Zone": st.column_config.TextColumn("Zone Name", disabled=True),
+                        "Distance (km)": st.column_config.NumberColumn("Distance (km)", disabled=True),
+                        "Delivery Time": st.column_config.TextColumn("Delivery Time (e.g., 30 mins)", required=True),
+                        "Delivery Fees": st.column_config.NumberColumn("Delivery Fees (EGP)", required=True)
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="pricing_editor"
+                )
+
+                # زر الحفظ النهائي للإدارة
+                if st.button("✅ Finalize & Send to Admin", type="primary"):
+                    # التحقق من أن جميع البيانات مكتملة
+                    if edited_pricing_df["Delivery Time"].eq("").any() or edited_pricing_df["Delivery Fees"].isnull().any():
+                        st.error("⚠️ Please fill in the Delivery Time and Delivery Fees for all zones before saving.")
+                    else:
+                        save_detailed_request(v_id_clean, v_name, edited_pricing_df)
+                        st.success("🎉 Success! Your zones, delivery times, and fees have been submitted to Admin.")
+
+# ----------------- Tab 3: Admin Review -----------------
 with tab3:
-    st.header("📥 Vendor Coverage Change Requests")
-    if os.path.exists("vendor_requests.csv"):
-        req_df = pd.read_csv("vendor_requests.csv")
+    st.header("📥 Vendor Pricing & Coverage Requests")
+    if os.path.exists("vendor_pricing_requests.csv"):
+        req_df = pd.read_csv("vendor_pricing_requests.csv")
         st.dataframe(req_df, use_container_width=True)
-        with open("vendor_requests.csv", "rb") as file:
-            st.download_button(label="📥 Download Requests Log (CSV)", data=file, file_name="vendor_coverage_updates.csv", mime="text/csv")
+        with open("vendor_pricing_requests.csv", "rb") as file:
+            st.download_button(label="📥 Download Detailed Requests (CSV)", data=file, file_name="vendor_pricing_updates.csv", mime="text/csv")
     else:
-        st.info("No modification requests received yet.")
+        st.info("No detailed requests received yet.")
