@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import geopandas as gpd
 from shapely import wkt
-import plotly.express as px
 import plotly.graph_objects as go
 import re
 import os
@@ -48,7 +47,7 @@ def load_data():
     gdf_a['id'] = gdf_a.index.astype(str)
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
     
-    # Generate JSON string inside the cached load function to prevent unhashable cache errors
+    # Generate JSON string inside the cached load function
     geojson_dict = json.loads(gdf_a.to_json())
     
     return df_v, gdf_a, geojson_dict
@@ -108,24 +107,31 @@ with tab2:
                 st.subheader("🗺️ Coverage Map (Lasso/Box Select)")
                 st.caption("🔍 In the top right corner of the map, click the **Lasso icon** (حبل) or **Box icon** (مربع). Then draw around the zones you want to select!")
                 
+                # Prepare data for Plotly using Graph Objects (stable)
                 df_plot = gdf_areas[['id', 'Delivery Location Area Name']].copy()
-                df_plot['Status'] = 'Available'
-                df_plot.loc[df_plot['Delivery Location Area Name'].isin(st.session_state["selected_zones"]), 'Status'] = 'Covered'
                 
-                fig = px.choropleth_mapbox(
-                    df_plot,
+                # Create a numerical color scale: 0 for Available (Blue), 1 for Covered (Green)
+                df_plot['ColorValue'] = 0
+                df_plot.loc[df_plot['Delivery Location Area Name'].isin(st.session_state["selected_zones"]), 'ColorValue'] = 1
+                
+                fig = go.Figure()
+
+                # Add Polygons (Choropleth layer)
+                fig.add_trace(go.Choroplethmapbox(
                     geojson=full_geojson,
-                    locations='id',
+                    locations=df_plot['id'],
+                    z=df_plot['ColorValue'],
                     featureidkey="properties.id",
-                    color='Status',
-                    color_discrete_map={'Available': '#3388ff', 'Covered': '#28a745'},
-                    hover_name='Delivery Location Area Name',
-                    mapbox_style="carto-positron",
-                    zoom=11,
-                    center={"lat": float(v_row["lat"]), "lon": float(v_row["lng"])},
-                    opacity=0.4
-                )
+                    colorscale=[[0, '#3388ff'], [1, '#28a745']],
+                    showscale=False,
+                    marker_opacity=0.4,
+                    marker_line_width=1,
+                    text=df_plot['Delivery Location Area Name'],
+                    hoverinfo="text",
+                    name="Zones"
+                ))
                 
+                # Add Vendor Marker (Scatter layer)
                 fig.add_trace(go.Scattermapbox(
                     lat=[float(v_row["lat"])],
                     lon=[float(v_row["lng"])],
@@ -133,10 +139,17 @@ with tab2:
                     marker=go.scattermapbox.Marker(size=14, color='red'),
                     text=[v_name],
                     textposition="bottom right",
-                    hoverinfo='text'
+                    hoverinfo='text',
+                    name="Vendor"
                 ))
                 
-                fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, uirevision='constant')
+                fig.update_layout(
+                    mapbox_style="carto-positron",
+                    mapbox_zoom=11,
+                    mapbox_center={"lat": float(v_row["lat"]), "lon": float(v_row["lng"])},
+                    margin={"r":0,"t":0,"l":0,"b":0},
+                    uirevision='constant'
+                )
                 
                 try:
                     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode=('points', 'box', 'lasso'))
