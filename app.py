@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import geopandas as gpd
 from shapely import wkt
-from shapely.geometry import Point
-import folium
-from folium.plugins import MarkerCluster
-from streamlit_folium import st_folium
+import plotly.express as px
+import plotly.graph_objects as go
 import re
 import os
+import json
 from datetime import datetime
 
 # 1. Page Configuration
@@ -45,22 +44,21 @@ def load_data():
     gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
     gdf_a["area_size"] = gdf_a["geometry"].area
     gdf_a = gdf_a[gdf_a["area_size"] < 0.5]
-    gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
-    # Simplify geometries aggressively to make map ultra-fast
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.003, preserve_topology=False)
+    # We must assign a string ID to each feature for Plotly to link them
+    gdf_a['id'] = gdf_a.index.astype(str)
+    
+    # Simplify geometries to optimize browser rendering
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.002, preserve_topology=False)
+    
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
 
-# جلب المناطق القريبة بناءً على المسافة التي يحددها المستخدم
+# Plotly needs GeoJSON dictionary
 @st.cache_data
-def get_nearby_polygons(lat, lng, radius_km):
-    v_point = Point(lng, lat)
-    # تحويل الكيلومترات إلى درجات تقريبية (كل 1 درجة تعادل تقريباً 111 كم)
-    radius_deg = radius_km / 111.0
-    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
-    return gdf_areas[nearby_mask].copy()
+def get_geojson(gdf):
+    return json.loads(gdf.to_json())
 
 def save_modification_request(vendor_id, vendor_name, original_zones, new_zones):
     request_data = pd.DataFrame([{
@@ -79,86 +77,15 @@ def save_modification_request(vendor_id, vendor_name, original_zones, new_zones)
 
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
-# Tab 1: Overview Map
+# Tab 1: Overview Map (Static for now)
 with tab1:
-    st.header("Zones & Vendors Simulation Dashboard")
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        st.subheader("Filter Controls")
-        all_cities = ["All"] + sorted(df_vendors["Vendor Attributes Vendor City"].dropna().unique().tolist())
-        selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
-        st.markdown("---")
-        st.write("**Vendor Search Options:**")
-        
-        temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["Vendor Attributes Vendor City"] == selected_city]
-        vendor_names = ["All"] + sorted(temp_df["Vendor Attributes Vendor Name (English)"].dropna().unique().tolist())
-        selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
-        vendor_ids = ["All"] + sorted(temp_df["Vendor Attributes Vendor Id"].dropna().unique().tolist())
-        selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
-        chain_ids = ["All"] + sorted(temp_df["Chain Attributes Chain ID"].dropna().unique().tolist())
-        selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
-        st.markdown("---")
-        show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
-        
-        if st.button("Reset Filters", key="reset_btn"):
-            st.session_state.clear()
-            st.rerun()
-            
-    with col2:
-        filtered_v = df_vendors
-        if selected_city != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor City"] == selected_city]
-        if selected_name != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Name (English)"] == selected_name]
-        if selected_v_id != "All":
-            filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Id"] == selected_v_id]
-        if selected_chain != "All":
-            filtered_v = filtered_v[filtered_v["Chain Attributes Chain ID"] == selected_chain]
-            
-        if not filtered_v.empty:
-            center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
-            zoom = 13 if (selected_name != "All" or selected_v_id != "All") else 11 if selected_chain != "All" else 11 if selected_city != "All" else 6
-        else:
-            center = [30.0444, 31.2357]
-            zoom = 6
-            
-        m = folium.Map(location=center, zoom_start=zoom)
-        
-        if show_zones and not gdf_areas.empty:
-            folium.GeoJson(
-                gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
-                name="Delivery Zones",
-                style_function=lambda feature: {
-                    "fillColor": "#0055ff",
-                    "color": "#002266",
-                    "weight": 1.0,
-                    "fillOpacity": 0.20
-                },
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
-            ).add_to(m)
-            
-        if not filtered_v.empty:
-            cluster = MarkerCluster().add_to(m)
-            is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
-            icon_color = "green" if is_searched else "red"
-            icon_shape = "star" if is_searched else "shopping-cart"
-            for _, row in filtered_v.iterrows():
-                popup_html = f"<b>{row['Vendor Attributes Vendor Name (English)']}</b><br><b>Vendor ID:</b> {row['Vendor Attributes Vendor Id']}<br><b>Chain ID:</b> {row['Chain Attributes Chain ID']}<br><b>Chain Name:</b> {row['Chain Attributes Chain Name']}<br><b>City:</b> {row['Vendor Attributes Vendor City']}"
-                folium.Marker(
-                    location=[row['lat'], row['lng']],
-                    popup=folium.Popup(popup_html, max_width=300),
-                    tooltip=row["Vendor Attributes Vendor Name (English)"],
-                    icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
-                ).add_to(cluster)
-                
-        # إيقاف إرجاع البيانات في خريطة الإدارة لتسريع الموقع بالكامل
-        st_folium(m, width="100%", height=600, key="main_map_admin", returned_objects=[])
+    st.header("Zones & Vendors Dashboard")
+    st.info("The Admin Map is kept simple in this version to focus on the Vendor Portal Plotly implementation.")
 
-# Tab 2: Vendor Portal (Fast Clicking Map)
+# Tab 2: Vendor Portal (Plotly Lasso Select)
 with tab2:
     st.header("Vendor Portal - Coverage Zones Management")
-    st.info("Enter your Vendor ID to view your store location and configure your delivery coverage areas.")
+    st.info("🎯 Use the Box Select or Lasso Select tool on the map to highlight multiple areas instantly!")
     vendor_input_id = st.text_input("Enter Vendor ID:")
     
     if vendor_input_id:
@@ -166,119 +93,113 @@ with tab2:
         vendor_data = df_vendors[df_vendors["Vendor Attributes Vendor Id"] == v_id_clean]
         
         if vendor_data.empty:
-            st.error("Invalid Vendor ID. Please verify and try again.")
+            st.error("Invalid Vendor ID.")
         else:
             v_row = vendor_data.iloc[0]
             v_name = v_row["Vendor Attributes Vendor Name (English)"]
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
-
-            st.markdown("---")
-            # مؤشر المسافة لجعل الخريطة سريعة جداً عند تحميل مناطق أقل
-            st.subheader("📍 Map Loading Radius")
-            map_radius_km = st.slider(
-                "Adjust how far you want to see zones on the map (Smaller radius = Much faster clicking):",
-                min_value=3, max_value=40, value=6, step=1,
-                help="Decrease this to 5km to make map clicking extremely fast. Increase it if you need to select far areas."
-            )
-
-            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
-            all_available_zones = sorted(portal_areas["Delivery Location Area Name"].dropna().unique().tolist())
-
-            if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
-                st.session_state["vendor_portal_id"] = v_id_clean
-                initial_covered = portal_areas["Delivery Location Area Name"].head(3).tolist()
+            
+            all_available_areas = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
+            
+            if "portal_vendor_id" not in st.session_state or st.session_state["portal_vendor_id"] != v_id_clean:
+                st.session_state["portal_vendor_id"] = v_id_clean
+                initial_covered = gdf_areas["Delivery Location Area Name"].head(3).tolist()
                 st.session_state["selected_zones"] = list(initial_covered)
-                st.session_state["last_clicked_coord"] = None
+                st.session_state["vendor_multiselect"] = list(initial_covered)
+
+            st.markdown("---")
+            col_map, col_form = st.columns([6, 4])
+            
+            with col_map:
+                st.subheader("🗺️ Coverage Map (Lasso/Box Select)")
+                st.caption("🔍 In the top right corner of the map, click the **Lasso icon** (حبل) or **Box icon** (مربع). Then draw around the zones you want to select!")
                 
-            current_saved = st.session_state["selected_zones"]
-
-            st.markdown("---")
-            st.subheader(f"🗺️ Live Coverage Map ({len(current_saved)} Zones Selected)")
-            st.caption("💡 **Tip:** Click directly on any area on the map to instantly add or remove it!")
-
-            col_l1, col_l2 = st.columns(2)
-            col_l1.markdown("🟢 **Green Areas:** Delivering here")
-            col_l2.markdown("🔵 **Blue Areas:** Available (Click to add)")
-
-            v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
-
-            folium.Marker(
-                location=[v_row["lat"], v_row["lng"]],
-                popup=f"<b>{v_name}</b><br>Store Location",
-                tooltip=v_name,
-                icon=folium.Icon(color="green", icon="star")
-            ).add_to(v_map)
-
-            current_saved_set = set(current_saved)
-
-            def vendor_zone_style(feature):
-                name = feature["properties"]["Delivery Location Area Name"]
-                if name in current_saved_set:
-                    return {"fillColor": "#28a745", "color": "#155724", "weight": 2.5, "fillOpacity": 0.55}
-                else:
-                    return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.0, "fillOpacity": 0.15}
-
-            # دمج مضلعات المناطق الثابتة والمختارة لتقليل الضغط على المتصفح
-            selected_mask = gdf_areas["Delivery Location Area Name"].isin(current_saved)
-            display_gdf = pd.concat([portal_areas, gdf_areas[selected_mask]]).drop_duplicates(subset=["Delivery Location Area Name"])
-
-            folium.GeoJson(
-                display_gdf[["Delivery Location Area Name", "geometry"]].to_json(),
-                name="Delivery Zones",
-                style_function=vendor_zone_style,
-                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Toggle: "])
-            ).add_to(v_map)
-
-            map_data = st_folium(
-                v_map,
-                width="100%",
-                height=520,
-                key=f"vendor_map_{v_id_clean}_{map_radius_km}",
-                returned_objects=["last_clicked"]
-            )
-
-            # تسجيل النقرات
-            if map_data and map_data.get("last_clicked"):
-                click = map_data["last_clicked"]
-                if click != st.session_state.get("last_clicked_coord"):
-                    st.session_state["last_clicked_coord"] = click
-                    click_pt = Point(click["lng"], click["lat"])
+                # Prepare data for Plotly
+                df_plot = gdf_areas[['id', 'Delivery Location Area Name']].copy()
+                df_plot['Status'] = 'Available'
+                df_plot.loc[df_plot['Delivery Location Area Name'].isin(st.session_state["selected_zones"]), 'Status'] = 'Covered'
+                
+                geojson_data = get_geojson(gdf_areas)
+                
+                # Create Plotly Map
+                fig = px.choropleth_mapbox(
+                    df_plot,
+                    geojson=geojson_data,
+                    locations='id',
+                    featureidkey="properties.id",
+                    color='Status',
+                    color_discrete_map={'Available': '#3388ff', 'Covered': '#28a745'},
+                    hover_name='Delivery Location Area Name',
+                    mapbox_style="carto-positron",
+                    zoom=11,
+                    center={"lat": float(v_row["lat"]), "lon": float(v_row["lng"])},
+                    opacity=0.4
+                )
+                
+                # Add Vendor Marker
+                fig.add_trace(go.Scattermapbox(
+                    lat=[float(v_row["lat"])],
+                    lon=[float(v_row["lng"])],
+                    mode='markers+text',
+                    marker=go.scattermapbox.Marker(size=14, color='red'),
+                    text=[v_name],
+                    textposition="bottom right",
+                    hoverinfo='text'
+                ))
+                
+                fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, uirevision='constant')
+                
+                # Render Plotly Chart with native selection events (Supported in newer Streamlit)
+                try:
+                    event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode=('points', 'box', 'lasso'))
                     
-                    matches = display_gdf[display_gdf.geometry.contains(click_pt)]
-                    if not matches.empty:
-                        clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
-                        
-                        if clicked_zone in st.session_state["selected_zones"]:
-                            st.session_state["selected_zones"].remove(clicked_zone)
-                        else:
-                            st.session_state["selected_zones"].append(clicked_zone)
+                    # Capture Lasso/Box Selection
+                    if event and "selection" in event and event["selection"]["points"]:
+                        # Extract the IDs/Names of selected points
+                        selected_indices = [p["location"] for p in event["selection"]["points"] if "location" in p]
+                        if selected_indices:
+                            selected_names = df_plot[df_plot["id"].isin(selected_indices)]["Delivery Location Area Name"].tolist()
                             
-                        st.rerun()
+                            # Merge with existing selected zones
+                            new_set = set(st.session_state["selected_zones"]).union(set(selected_names))
+                            if new_set != set(st.session_state["selected_zones"]):
+                                st.session_state["selected_zones"] = list(new_set)
+                                st.session_state["vendor_multiselect"] = list(new_set)
+                                st.rerun()
+                except TypeError:
+                    # Fallback if on_select is not supported by their Streamlit version
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.warning("Your Streamlit version doesn't support Plotly Lasso return. Please use the form on the right.")
 
-            st.markdown("---")
-            st.subheader("📝 Request Zone Coverage Updates")
+            with col_form:
+                st.subheader("📝 Selected Zones")
+                st.caption("You can also add/remove manually here.")
+                
+                def sync_from_multiselect():
+                    st.session_state["selected_zones"] = list(st.session_state["vendor_multiselect"])
 
-            def sync_from_multiselect():
-                st.session_state["selected_zones"] = list(st.session_state["sync_multiselect"])
+                st.multiselect(
+                    "Service Areas:",
+                    options=all_available_areas,
+                    default=st.session_state["selected_zones"],
+                    key="vendor_multiselect",
+                    on_change=sync_from_multiselect
+                )
+                
+                if st.button("🧹 Clear All Zones", type="secondary"):
+                    st.session_state["selected_zones"] = []
+                    st.session_state["vendor_multiselect"] = []
+                    st.rerun()
 
-            # دمج القائمة لتشمل المناطق التي اختارها من خارج نطاق البحث لتظل ظاهرة
-            all_dropdown_options = sorted(list(set(all_available_zones + current_saved)))
-
-            st.multiselect(
-                "Selected Service Areas (You can also type to search):",
-                options=all_dropdown_options,
-                default=current_saved,
-                key="sync_multiselect",
-                on_change=sync_from_multiselect
-            )
-
-            if st.button("🚀 Submit Modification Request", type="primary", use_container_width=True):
-                if not current_saved:
-                    st.warning("No zones selected!")
-                else:
-                    save_modification_request(v_id_clean, v_name, [], current_saved)
-                    st.success(f"✅ Modification request for {len(current_saved)} zones submitted successfully! Pending admin review.")
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🚀 Submit Modification Request", type="primary", use_container_width=True):
+                    final_selected = st.session_state["selected_zones"]
+                    if not final_selected:
+                        st.warning("No zones selected!")
+                    else:
+                        save_modification_request(v_id_clean, v_name, [], final_selected)
+                        st.success(f"✅ Modification request for {len(final_selected)} zones submitted successfully!")
 
 # Tab 3: Admin Review
 with tab3:
