@@ -154,7 +154,6 @@ with tab1:
                 
             m = folium.Map(location=center, zoom_start=zoom)
             
-            # منع المستطيل الأسود في صفحة الإدارة
             css_no_box = """
             <style>
             .leaflet-interactive:focus,
@@ -219,21 +218,25 @@ with tab2:
 
             map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=35, value=10, step=1)
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
-            
-            # ترتيب من الأكبر للأصغر لضمان أن المربعات الصغيرة تُرسم فوق المربعات الأكبر
             portal_areas = portal_areas.sort_values(by="area_size", ascending=False)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
-                initial_covered = portal_areas["Delivery Location Area Name"].head(2).tolist()
+                initial_covered = [z for z in portal_areas["Delivery Location Area Name"].head(2).tolist() if z in all_available_zones]
                 st.session_state["vendor_multiselect"] = list(initial_covered)
                 st.session_state["applied_zones"] = list(initial_covered)
                 st.session_state["last_click_sig"] = None
                 st.session_state["ms_version"] = 0
                 st.session_state["show_pricing_table"] = False
 
-            current_applied = st.session_state.get("applied_zones", [])
+            # تأمين وتنقية القيم الافتراضية لمنع ظهور خطأ StreamlitDefaultNotInOptionsError
+            valid_selected = [z for z in st.session_state.get("vendor_multiselect", []) if z in all_available_zones]
+            st.session_state["vendor_multiselect"] = valid_selected
+
+            valid_applied = [z for z in st.session_state.get("applied_zones", []) if z in all_available_zones]
+            st.session_state["applied_zones"] = valid_applied
+            current_applied = valid_applied
 
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
@@ -260,10 +263,8 @@ with tab2:
                     else:
                         return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.2, "fillOpacity": 0.18}
 
-                # CSS لإلغاء المستطيل الأسود تماماً وتمييز حدود المنطقة الحقيقية فقط
                 css_fix_box = """
                 <style>
-                /* إزالة المستطيل الأسود (Focus Outline) نهائياً */
                 .leaflet-interactive:focus,
                 path.leaflet-interactive:focus,
                 .leaflet-container :focus,
@@ -274,7 +275,6 @@ with tab2:
                 path.leaflet-interactive:hover {
                     cursor: pointer;
                 }
-                /* عند النقر: إبراز نفس شكل المضلع بحدود حمراء دقيقة بدون أي مستطيل */
                 path.leaflet-interactive:focus {
                     outline: none !important;
                     stroke: #e74c3c !important;
@@ -305,12 +305,10 @@ with tab2:
                     returned_objects=["last_clicked", "last_object_clicked"]
                 )
 
-                # التقاط النقرة بدقة
                 if map_data:
                     clicked_zone = None
                     sig = None
 
-                    # 1. فحص إحداثيات النقطة وفرز المناطق المتقاطعة تصاعدياً لاختيار أصغر مضلع
                     if map_data.get("last_clicked"):
                         c = map_data["last_clicked"]
                         if isinstance(c, dict) and "lat" in c and "lng" in c:
@@ -324,7 +322,6 @@ with tab2:
                             if not matches.empty:
                                 clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
 
-                    # 2. فحص كائن المضلع المضغوط كخيار بديل
                     if not clicked_zone and map_data.get("last_object_clicked"):
                         obj_clicked = map_data.get("last_object_clicked")
                         if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
@@ -339,7 +336,7 @@ with tab2:
                         else:
                             curr_search.append(clicked_zone)
                             
-                        st.session_state["vendor_multiselect"] = curr_search
+                        st.session_state["vendor_multiselect"] = [z for z in curr_search if z in all_available_zones]
                         st.session_state["ms_version"] += 1
                         st.session_state["show_pricing_table"] = False
                         st.rerun()
