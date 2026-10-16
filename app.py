@@ -11,13 +11,10 @@ import re
 import os
 from datetime import datetime
 
-# ==========================================
-# 1. إعدادات الصفحة
-# ==========================================
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management System", page_icon="🔒")
 
 # ==========================================
-# 2. إدارة المستخدمين وقاعدة البيانات الأمنية
+# 1. إدارة المستخدمين وقاعدة البيانات الأمنية
 # ==========================================
 USERS_FILE = "users.csv"
 
@@ -61,7 +58,7 @@ def delete_user(email):
     return True, "User deleted successfully!"
 
 # ==========================================
-# 3. دوال المعالجة والمسافات
+# 2. دوال المعالجة وجلب البيانات من Google Sheets
 # ==========================================
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
@@ -69,26 +66,49 @@ def clean_wkt(polygon_str):
     return re.sub(r',\s*\)\)', '))', re.sub(r'polygon\(\(\s*,\s*', 'polygon((', polygon_str.strip(), flags=re.IGNORECASE))
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0 # نصف قطر الأرض بالكيلومتر
+    R = 6371.0 
     dlat = np.radians(lat2 - lat1)
     dlon = np.radians(lon2 - lon1)
     a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R * c
 
-@st.cache_data
-def load_data():
-    file_path = "Dataaa.xlsx"
-    df_v = pd.read_excel(file_path, sheet_name="Vendor Location")
-    coords = df_v["Vendor Attributes Vendor Map Location"].str.split(",", expand=True)
-    df_v["lat"] = pd.to_numeric(coords[0], errors="coerce")
-    df_v["lng"] = pd.to_numeric(coords[1], errors="coerce")
-    df_v = df_v.dropna(subset=["lat", "lng"])
-    df_v["Vendor Attributes Vendor Id"] = df_v["Vendor Attributes Vendor Id"].astype(str)
-    df_v["Chain Attributes Chain ID"] = df_v["Chain Attributes Chain ID"].astype(str)
+def get_col(df, possible_names):
+    for name in possible_names:
+        for col in df.columns:
+            if str(name).strip().lower() == str(col).strip().lower():
+                return col
+    return None
 
-    df_a = pd.read_excel(file_path, sheet_name="Area")
-    df_a["cleaned_wkt"] = df_a["Delivery Location Area Polygon"].apply(clean_wkt)
+# جلب البيانات من Google Sheets (يتم تجديدها كل 3 ساعات لتقليل الضغط)
+@st.cache_data(ttl=10800)
+def load_data():
+    url_areas = "https://docs.google.com/spreadsheets/d/11Jc5o3ZUh0WgMddrzmIeet9tjYhqzlc9SIwVhmwc2jE/export?format=csv&gid=298729660"
+    url_vendors = "https://docs.google.com/spreadsheets/d/11oSBDZz_HHi7vDouO92zk2KD4CMiBV3g5Qf8Dxr0iF0/export?format=csv&gid=1243657258"
+    url_delivery = "https://docs.google.com/spreadsheets/d/13ByYgHhVxrdyWEMzy1VvSCtSLnVsrhxYnnC-7SdvVZ8/export?format=csv&gid=29074284"
+    
+    df_v = pd.read_csv(url_vendors)
+    df_a = pd.read_csv(url_areas)
+    
+    try:
+        df_d = pd.read_csv(url_delivery)
+    except:
+        df_d = pd.DataFrame() 
+
+    map_loc_col = get_col(df_v, ["Vendor Attributes Vendor Map Location", "Map Location", "Location"])
+    if map_loc_col:
+        coords = df_v[map_loc_col].str.split(",", expand=True)
+        df_v["lat"] = pd.to_numeric(coords[0], errors="coerce")
+        df_v["lng"] = pd.to_numeric(coords[1], errors="coerce")
+        df_v = df_v.dropna(subset=["lat", "lng"])
+    
+    vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID"])
+    cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID"])
+    if vid_col: df_v["Vendor Attributes Vendor Id"] = df_v[vid_col].astype(str)
+    if cid_col: df_v["Chain Attributes Chain ID"] = df_v[cid_col].astype(str)
+
+    poly_col = get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT"])
+    df_a["cleaned_wkt"] = df_a[poly_col].apply(clean_wkt)
     
     geometries, valid_indices = [], []
     for idx, wkt_str in df_a["cleaned_wkt"].items():
@@ -102,19 +122,21 @@ def load_data():
     gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
     gdf_a["area_size"] = gdf_a["geometry"].area
     
-    # استبعاد مضلعات ماكدونالدز فقط ومضلعات الجمهورية العامة (> 0.5)
+    area_name_col = get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name"])
+    gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col]
+    
     mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"^mcd|^mcdonald", case=False, na=False)
     gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
-    
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
     centroids = gdf_a.geometry.centroid
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
     gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
-    return df_v, gdf_a
+    
+    return df_v, gdf_a, df_d
 
-df_vendors, gdf_areas = load_data()
+df_vendors, gdf_areas, df_delivery = load_data()
 
 @st.cache_data
 def get_nearby_polygons(lat, lng, radius_km):
@@ -142,7 +164,7 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
         save_df.to_csv(file_name, index=False)
 
 # ==========================================
-# 4. شاشة تسجيل الدخول (Authentication)
+# 3. شاشة تسجيل الدخول (Authentication)
 # ==========================================
 init_users_db()
 
@@ -175,9 +197,6 @@ if not st.session_state["logged_in"]:
                     st.error("❌ البريد الإلكتروني أو كلمة المرور غير صحيحة.")
     st.stop()
 
-# ==========================================
-# 5. الشريط الجانبي وتسجيل الخروج
-# ==========================================
 current_user = st.session_state["current_user"]
 is_admin = current_user["role"] == "admin"
 
@@ -188,27 +207,16 @@ with st.sidebar:
         st.write(f"📌 **نوع الصلاحية:** `{current_user['access_type']}`")
     st.markdown("---")
     if st.button("🚪 تسجيل الخروج (Logout)", use_container_width=True):
-        st.session_state["logged_in"] = False
-        st.session_state["current_user"] = None
         st.session_state.clear()
         st.rerun()
 
-# ==========================================
-# 6. توزيع الصفحات حسب الدور (Role-Based Routing)
-# ==========================================
 if is_admin:
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🗺️ Overview Map (Admin)",
-        "🛒 Vendor Portal",
-        "📥 Change Requests (Admin)",
-        "👥 User Management (Admin)"
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Overview Map", "🛒 Vendor Portal", "📥 Incoming Requests", "👥 Users"])
 else:
-    # الفيندور يرى فقط صفحة Vendor Portal
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (لوحة المراقبة العامة - للأدمن فقط)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -221,34 +229,35 @@ if is_admin:
             col1, col2 = st.columns([1, 4])
             with col1:
                 st.subheader("Filter Controls")
-                all_cities = ["All"] + sorted(df_vendors["Vendor Attributes Vendor City"].dropna().unique().tolist())
+                city_col = get_col(df_vendors, ["Vendor Attributes Vendor City", "City"])
+                all_cities = ["All"] + sorted(df_vendors[city_col].dropna().unique().tolist()) if city_col else ["All"]
                 selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
                 st.markdown("---")
                 
-                temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["Vendor Attributes Vendor City"] == selected_city]
-                vendor_names = ["All"] + sorted(temp_df["Vendor Attributes Vendor Name (English)"].dropna().unique().tolist())
+                temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors[city_col] == selected_city]
+                name_col = get_col(temp_df, ["Vendor Attributes Vendor Name (English)", "Vendor Name"])
+                vendor_names = ["All"] + sorted(temp_df[name_col].dropna().unique().tolist()) if name_col else ["All"]
                 selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
-                vendor_ids = ["All"] + sorted(temp_df["Vendor Attributes Vendor Id"].dropna().unique().tolist())
-                selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
-                chain_ids = ["All"] + sorted(temp_df["Chain Attributes Chain ID"].dropna().unique().tolist())
-                selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
-                st.markdown("---")
-                show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
                 
+                vid_col = get_col(temp_df, ["Vendor Attributes Vendor Id"])
+                vendor_ids = ["All"] + sorted(temp_df[vid_col].dropna().unique().tolist()) if vid_col else ["All"]
+                selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
+                
+                cid_col = get_col(temp_df, ["Chain Attributes Chain ID"])
+                chain_ids = ["All"] + sorted(temp_df[cid_col].dropna().unique().tolist()) if cid_col else ["All"]
+                selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
+                
+                show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
                 if st.button("Reset Filters", key="reset_btn"):
                     st.session_state.clear()
                     st.rerun()
                     
             with col2:
                 filtered_v = df_vendors
-                if selected_city != "All":
-                    filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor City"] == selected_city]
-                if selected_name != "All":
-                    filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Name (English)"] == selected_name]
-                if selected_v_id != "All":
-                    filtered_v = filtered_v[filtered_v["Vendor Attributes Vendor Id"] == selected_v_id]
-                if selected_chain != "All":
-                    filtered_v = filtered_v[filtered_v["Chain Attributes Chain ID"] == selected_chain]
+                if selected_city != "All": filtered_v = filtered_v[filtered_v[city_col] == selected_city]
+                if selected_name != "All": filtered_v = filtered_v[filtered_v[name_col] == selected_name]
+                if selected_v_id != "All": filtered_v = filtered_v[filtered_v[vid_col] == selected_v_id]
+                if selected_chain != "All": filtered_v = filtered_v[filtered_v[cid_col] == selected_chain]
                     
                 if not filtered_v.empty:
                     center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
@@ -258,56 +267,42 @@ if is_admin:
                     zoom = 6
                     
                 m = folium.Map(location=center, zoom_start=zoom)
-                
-                css_no_box = """
-                <style>
-                .leaflet-interactive:focus,
-                path.leaflet-interactive:focus,
-                .leaflet-container :focus,
-                svg:focus {
-                    outline: none !important;
-                    box-shadow: none !important;
-                }
-                </style>
-                """
+                css_no_box = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;}</style>"
                 m.get_root().html.add_child(folium.Element(css_no_box))
                 
                 if show_zones and not gdf_areas.empty:
                     folium.GeoJson(
                         gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                         name="Delivery Zones",
-                        style_function=lambda feature: {
-                            "fillColor": "#0055ff",
-                            "color": "#002266",
-                            "weight": 1.0,
-                            "fillOpacity": 0.15
-                        },
+                        style_function=lambda feature: {"fillColor": "#0055ff", "color": "#002266", "weight": 1.0, "fillOpacity": 0.15},
                         tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
                     ).add_to(m)
                     
                 if not filtered_v.empty:
                     cluster = MarkerCluster().add_to(m)
                     is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
-                    icon_color = "green" if is_searched else "red"
-                    icon_shape = "star" if is_searched else "shopping-cart"
                     for _, row in filtered_v.iterrows():
-                        popup_html = f"<b>{row['Vendor Attributes Vendor Name (English)']}</b><br><b>Vendor ID:</b> {row['Vendor Attributes Vendor Id']}<br><b>Chain ID:</b> {row['Chain Attributes Chain ID']}<br><b>Chain Name:</b> {row['Chain Attributes Chain Name']}<br><b>City:</b> {row['Vendor Attributes Vendor City']}"
+                        popup_html = f"<b>{row.get(name_col, '')}</b><br><b>Vendor ID:</b> {row.get(vid_col, '')}"
                         folium.Marker(
                             location=[row['lat'], row['lng']],
                             popup=folium.Popup(popup_html, max_width=300),
-                            tooltip=row["Vendor Attributes Vendor Name (English)"],
-                            icon=folium.Icon(color=icon_color, icon=icon_shape, prefix="fa")
+                            tooltip=row.get(name_col, ""),
+                            icon=folium.Icon(color="green" if is_searched else "red", icon="star" if is_searched else "shopping-cart", prefix="fa")
                         ).add_to(cluster)
                         
                 st_folium(m, width="100%", height=650, key="main_map_admin", returned_objects=[])
 
 # ==========================================
-# Tab 2: Vendor Portal (مقيد بالصلاحيات)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
     
-    # تحديد الفيندور المتاح حسب الصلاحية
+    vid_col = get_col(df_vendors, ["Vendor Attributes Vendor Id"])
+    name_col = get_col(df_vendors, ["Vendor Attributes Vendor Name (English)"])
+    cid_col = get_col(df_vendors, ["Chain Attributes Chain ID"])
+    city_col = get_col(df_vendors, ["Vendor Attributes Vendor City"])
+
     if is_admin:
         vendor_input_id = st.text_input("Enter Vendor ID:", placeholder="اكتب رقم الفيندور هنا...")
     else:
@@ -315,53 +310,74 @@ with tab2:
         allowed_ids = [x.strip() for x in allowed_raw if x.strip()]
         
         if current_user["access_type"] == "Chain ID":
-            permitted_vendors = df_vendors[df_vendors["Chain Attributes Chain ID"].isin(allowed_ids)]
+            permitted_vendors = df_vendors[df_vendors[cid_col].isin(allowed_ids)]
         else:
-            permitted_vendors = df_vendors[df_vendors["Vendor Attributes Vendor Id"].isin(allowed_ids)]
+            permitted_vendors = df_vendors[df_vendors[vid_col].isin(allowed_ids)]
             
         if permitted_vendors.empty:
             st.warning("⚠️ لا توجد فروع أو فيندورز مربوطة بحسابك حتى الآن. يرجى التواصل مع الإدارة.")
             vendor_input_id = ""
         else:
             options_dict = dict(zip(
-                permitted_vendors["Vendor Attributes Vendor Id"],
-                permitted_vendors["Vendor Attributes Vendor Name (English)"] + " (" + permitted_vendors["Vendor Attributes Vendor Id"] + ")"
+                permitted_vendors[vid_col],
+                permitted_vendors[name_col] + " (" + permitted_vendors[vid_col] + ")"
             ))
-            selected_v_tuple = st.selectbox(
+            vendor_input_id = st.selectbox(
                 "اختر الفرع / الفيندور الذي تريد تعديل مناطقه:",
                 options=list(options_dict.keys()),
                 format_func=lambda x: options_dict[x]
             )
-            vendor_input_id = selected_v_tuple
 
     if vendor_input_id:
         v_id_clean = str(vendor_input_id).strip()
-        vendor_data = df_vendors[df_vendors["Vendor Attributes Vendor Id"] == v_id_clean]
+        vendor_data = df_vendors[df_vendors[vid_col] == v_id_clean]
         
         if vendor_data.empty:
             st.error("Invalid Vendor ID.")
         else:
             v_row = vendor_data.iloc[0]
-            v_name = v_row["Vendor Attributes Vendor Name (English)"]
-            v_city = v_row["Vendor Attributes Vendor City"]
-            st.success(f"Welcome: **{v_name}** | City: {v_city}")
+            v_name = v_row[name_col]
+            st.success(f"Welcome: **{v_name}** | City: {v_row.get(city_col, '')}")
 
-            map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=35, value=10, step=1)
+            map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=40, value=10, step=1)
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             portal_areas = portal_areas.sort_values(by="area_size", ascending=False)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
+            # -------------------------------------------------------------
+            # استرجاع البيانات من شيت الـ Delivery
+            # -------------------------------------------------------------
+            pre_filled_zones = []
+            pre_filled_data = {}
+            if not df_delivery.empty:
+                d_vid_col = get_col(df_delivery, ["Vendor ID", "Vendor Id", "VendorID"])
+                d_zone_col = get_col(df_delivery, ["Area Name", "Zone", "Delivery Location Area Name", "Area", "Area Name "])
+                d_time_col = get_col(df_delivery, ["Delivery Time", "Time", "Delivery Time "])
+                d_fee_col = get_col(df_delivery, ["Delivery Fees", "Fee", "Delivery Fee", "Delivery Fees "])
+                
+                if d_vid_col and d_zone_col:
+                    my_del_df = df_delivery[df_delivery[d_vid_col].astype(str) == v_id_clean]
+                    if not my_del_df.empty:
+                        for _, d_row in my_del_df.iterrows():
+                            z_name = d_row[d_zone_col]
+                            if z_name in all_available_zones:
+                                pre_filled_zones.append(z_name)
+                                pre_filled_data[z_name] = {
+                                    "time": str(d_row[d_time_col]) if d_time_col else "",
+                                    "fees": float(d_row[d_fee_col]) if d_fee_col else None
+                                }
+
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
-                initial_covered = [z for z in portal_areas["Delivery Location Area Name"].head(2).tolist() if z in all_available_zones]
-                st.session_state["vendor_multiselect"] = list(initial_covered)
+                initial_covered = pre_filled_zones if pre_filled_zones else [z for z in portal_areas["Delivery Location Area Name"].head(2).tolist() if z in all_available_zones]
+                st.session_state["ms_zones_input"] = list(initial_covered)
                 st.session_state["applied_zones"] = list(initial_covered)
+                st.session_state["pre_filled_data"] = pre_filled_data
                 st.session_state["last_click_sig"] = None
-                st.session_state["ms_version"] = 0
                 st.session_state["show_pricing_table"] = False
 
-            valid_selected = [z for z in st.session_state.get("vendor_multiselect", []) if z in all_available_zones]
-            st.session_state["vendor_multiselect"] = valid_selected
+            valid_selected = [z for z in st.session_state.get("ms_zones_input", []) if z in all_available_zones]
+            st.session_state["ms_zones_input"] = valid_selected
 
             valid_applied = [z for z in st.session_state.get("applied_zones", []) if z in all_available_zones]
             st.session_state["applied_zones"] = valid_applied
@@ -370,18 +386,12 @@ with tab2:
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
-            # ---------------- عمود الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
-                st.caption("Click any zone directly on the map to add it to the search box.")
+                st.caption("Click any small sub-zone to automatically copy its name, then paste it in the search box.")
 
                 v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
-                folium.Marker(
-                    location=[v_row["lat"], v_row["lng"]],
-                    popup=f"<b>{v_name}</b>",
-                    tooltip="Store Location",
-                    icon=folium.Icon(color="green", icon="star")
-                ).add_to(v_map)
+                folium.Marker(location=[v_row["lat"], v_row["lng"]], popup=f"<b>{v_name}</b>", icon=folium.Icon(color="green", icon="star")).add_to(v_map)
 
                 applied_set = set(current_applied)
 
@@ -394,22 +404,9 @@ with tab2:
 
                 css_fix_box = """
                 <style>
-                .leaflet-interactive:focus,
-                path.leaflet-interactive:focus,
-                .leaflet-container :focus,
-                svg:focus {
-                    outline: none !important;
-                    box-shadow: none !important;
-                }
-                path.leaflet-interactive:hover {
-                    cursor: pointer;
-                }
-                path.leaflet-interactive:focus {
-                    outline: none !important;
-                    stroke: #e74c3c !important;
-                    stroke-width: 3.5px !important;
-                    stroke-opacity: 1 !important;
-                }
+                .leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus { outline: none !important; box-shadow: none !important; }
+                path.leaflet-interactive:hover { cursor: pointer; }
+                path.leaflet-interactive:focus { stroke: #e74c3c !important; stroke-width: 3.5px !important; stroke-opacity: 1 !important; }
                 </style>
                 """
                 v_map.get_root().html.add_child(folium.Element(css_fix_box))
@@ -418,118 +415,101 @@ with tab2:
                     portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                     name="Delivery Zones",
                     style_function=vendor_zone_style,
-                    highlight_function=lambda feature: {
-                        "color": "#e74c3c",
-                        "weight": 3.5,
-                        "fillOpacity": 0.35
-                    },
-                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
+                    highlight_function=lambda feature: {"color": "#e74c3c", "weight": 3.5, "fillOpacity": 0.35},
+                    tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Click to Copy: "]),
+                    popup=folium.GeoJsonPopup(fields=["Delivery Location Area Name"], aliases=["Zone: "])
                 ).add_to(v_map)
 
-                map_data = st_folium(
-                    v_map,
-                    width="100%",
-                    height=500,
-                    key=f"vmap_{v_id_clean}_{map_radius_km}",
-                    returned_objects=["last_clicked", "last_object_clicked"]
-                )
+                copy_script = """
+                <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    var observer = new MutationObserver(function(mutations) {
+                        mutations.forEach(function(mutation) {
+                            mutation.addedNodes.forEach(function(node) {
+                                if (node.classList && node.classList.contains('leaflet-popup')) {
+                                    var content = node.querySelector('.leaflet-popup-content');
+                                    if (content && !content.querySelector('.copy-btn')) {
+                                        var td = content.querySelector('td') || content;
+                                        var zoneName = td.innerText.replace('Zone:', '').trim();
+                                        try { navigator.clipboard.writeText(zoneName); } catch(e) {}
+                                        var btn = document.createElement('button');
+                                        btn.className = 'copy-btn';
+                                        btn.innerHTML = '📋 Click to Copy: ' + zoneName;
+                                        btn.style = 'margin-top:8px; padding:6px 12px; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer; width:100%; font-weight:bold; font-size:12px;';
+                                        btn.onclick = function() {
+                                            navigator.clipboard.writeText(zoneName);
+                                            btn.innerHTML = '✅ Copied to Clipboard!';
+                                            setTimeout(function(){ btn.innerHTML = '📋 Click to Copy: ' + zoneName; }, 1800);
+                                        };
+                                        content.appendChild(btn);
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    observer.observe(document.body, { childList: true, subtree: true });
+                });
+                </script>
+                """
+                v_map.get_root().html.add_child(folium.Element(copy_script))
 
-                if map_data:
-                    clicked_zone = None
-                    sig = None
+                st_folium(v_map, width="100%", height=500, key=f"vmap_{v_id_clean}_{map_radius_km}", returned_objects=[])
 
-                    if map_data.get("last_clicked"):
-                        c = map_data["last_clicked"]
-                        if isinstance(c, dict) and "lat" in c and "lng" in c:
-                            sig = f"coords_{c['lat']:.5f}_{c['lng']:.5f}"
-                            pt = Point(c["lng"], c["lat"])
-                            matches = portal_areas[portal_areas.geometry.contains(pt)].sort_values(by="area_size", ascending=True)
-                            if matches.empty:
-                                dists = portal_areas.geometry.distance(pt)
-                                if not dists.empty and dists.min() < 0.003:
-                                    matches = portal_areas.loc[[dists.idxmin()]]
-                            if not matches.empty:
-                                clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
-
-                    if not clicked_zone and map_data.get("last_object_clicked"):
-                        obj_clicked = map_data.get("last_object_clicked")
-                        if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
-                            clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
-                            sig = f"obj_{clicked_zone}"
-
-                    if clicked_zone and sig != st.session_state.get("last_click_sig"):
-                        st.session_state["last_click_sig"] = sig
-                        curr_search = list(st.session_state.get("vendor_multiselect", []))
-                        if clicked_zone in curr_search:
-                            curr_search.remove(clicked_zone)
-                        else:
-                            curr_search.append(clicked_zone)
-                            
-                        st.session_state["vendor_multiselect"] = [z for z in curr_search if z in all_available_zones]
-                        st.session_state["ms_version"] += 1
-                        st.session_state["show_pricing_table"] = False
-                        st.rerun()
-
-            # ---------------- عمود مربع البحث ----------------
             with col_form:
                 st.subheader("📝 Selected Zones")
-                st.caption("Zones you click on the map will automatically appear here:")
+                st.caption("Paste (Ctrl+V) the zone names you copied from the map here:")
 
-                widget_key = f"ms_box_{st.session_state.get('ms_version', 0)}"
                 chosen_zones = st.multiselect(
                     "Service Areas:",
                     options=all_available_zones,
-                    default=st.session_state.get("vendor_multiselect", []),
-                    key=widget_key
+                    default=st.session_state.get("ms_zones_input", []),
+                    key="vendor_multiselect_box"
                 )
 
-                if chosen_zones != st.session_state.get("vendor_multiselect", []):
-                    st.session_state["vendor_multiselect"] = chosen_zones
-
                 btn_col1, btn_col2 = st.columns([1, 1])
-                
                 with btn_col1:
                     if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
-                        st.session_state["applied_zones"] = list(st.session_state["vendor_multiselect"])
+                        st.session_state["applied_zones"] = chosen_zones.copy()
+                        st.session_state["ms_zones_input"] = chosen_zones.copy()
                         st.session_state["show_pricing_table"] = False
                         st.rerun()
                         
                 with btn_col2:
                     if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
-                        if not st.session_state.get("applied_zones"):
-                            st.warning("Please select and 'Apply to Map' at least one zone first.")
-                        elif set(st.session_state.get("applied_zones", [])) != set(st.session_state.get("vendor_multiselect", [])):
-                            st.warning("You have unapplied changes! Please click 'Apply to Map' first.")
+                        if not chosen_zones:
+                            st.warning("Please select at least one zone.")
                         else:
+                            st.session_state["applied_zones"] = chosen_zones.copy()
+                            st.session_state["ms_zones_input"] = chosen_zones.copy()
                             st.session_state["show_pricing_table"] = True
                             st.rerun()
 
-            # ==========================================
-            # 4. جدول التسعير والمسافات
-            # ==========================================
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
                 st.subheader("💰 Set Delivery Pricing & Time")
-                st.info("Please fill in the estimated delivery time and fees for each selected zone based on the distance.")
+                if pre_filled_zones:
+                    st.success("💡 تم جلب بعض مناطقك المسجلة مسبقاً من قاعدة البيانات.")
 
                 current_applied_hash = ",".join(sorted(st.session_state["applied_zones"]))
-                
                 if st.session_state.get("pricing_hash") != current_applied_hash:
                     pricing_data = []
+                    pre_data = st.session_state.get("pre_filled_data", {})
+                    
                     for zone in st.session_state["applied_zones"]:
                         zone_row = gdf_areas[gdf_areas["Delivery Location Area Name"] == zone]
                         if not zone_row.empty:
-                            z_lat = zone_row.iloc[0]["centroid_lat"]
-                            z_lng = zone_row.iloc[0]["centroid_lng"]
-                            dist = haversine_km(v_row["lat"], v_row["lng"], z_lat, z_lng)
+                            dist = haversine_km(v_row["lat"], v_row["lng"], zone_row.iloc[0]["centroid_lat"], zone_row.iloc[0]["centroid_lng"])
                         else:
                             dist = 0.0
+                            
+                        def_time = pre_data.get(zone, {}).get("time", "")
+                        def_fee = pre_data.get(zone, {}).get("fees", None)
                             
                         pricing_data.append({
                             "Zone": zone,
                             "Distance (km)": round(dist, 1),
-                            "Delivery Time": "",
-                            "Delivery Fees": None
+                            "Delivery Time": def_time,
+                            "Delivery Fees": def_fee
                         })
                     
                     st.session_state["pricing_df"] = pd.DataFrame(pricing_data)
@@ -556,43 +536,32 @@ with tab2:
                         st.success("🎉 Success! Your zones, delivery times, and fees have been submitted to Admin.")
 
 # ==========================================
-# Tab 3: Admin Review (للأدمن فقط)
+# Tab 3 & 4: Admin Sections
 # ==========================================
 if is_admin:
     with tab3:
         st.header("📥 Vendor Pricing & Coverage Requests")
-        
         file_path = "vendor_pricing_requests.csv"
         if os.path.exists(file_path):
             try:
                 raw_df = pd.read_csv(file_path)
-                
                 if "Zone" not in raw_df.columns:
-                    st.warning("⚠️ Legacy data format detected. The old database format is incompatible and has been cleared.")
+                    st.warning("⚠️ Legacy data format detected. Rebuilding DB...")
                     os.remove(file_path)
                     st.rerun()
                 else:
                     raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                     
-                    st.write("### 🔍 Filter Requests")
                     f_col1, f_col2 = st.columns(2)
-                    
                     all_req_names = ["All"] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
                     filter_name = f_col1.selectbox("Filter by Vendor Name:", all_req_names, key="admin_req_name")
                     
-                    if filter_name != "All":
-                        temp_req_ids = raw_df[raw_df["Vendor Name"] == filter_name]["Vendor ID"].dropna().unique().tolist()
-                    else:
-                        temp_req_ids = raw_df["Vendor ID"].dropna().unique().tolist()
-                        
-                    all_req_ids = ["All"] + sorted(temp_req_ids)
-                    filter_id = f_col2.selectbox("Filter by Vendor ID:", all_req_ids, key="admin_req_id")
+                    temp_req_ids = raw_df[raw_df["Vendor Name"] == filter_name]["Vendor ID"].dropna().unique().tolist() if filter_name != "All" else raw_df["Vendor ID"].dropna().unique().tolist()
+                    filter_id = f_col2.selectbox("Filter by Vendor ID:", ["All"] + sorted(temp_req_ids), key="admin_req_id")
                     
                     filtered_raw = raw_df.copy()
-                    if filter_name != "All":
-                        filtered_raw = filtered_raw[filtered_raw["Vendor Name"] == filter_name]
-                    if filter_id != "All":
-                        filtered_raw = filtered_raw[filtered_raw["Vendor ID"] == filter_id]
+                    if filter_name != "All": filtered_raw = filtered_raw[filtered_raw["Vendor Name"] == filter_name]
+                    if filter_id != "All": filtered_raw = filtered_raw[filtered_raw["Vendor ID"] == filter_id]
                         
                     display_df = filtered_raw.groupby(["Date", "Vendor ID", "Vendor Name", "Status"]).agg(
                         Total_Zones=("Zone", "count"),
@@ -600,164 +569,68 @@ if is_admin:
                     ).reset_index()
                     display_df.rename(columns={"Total_Zones": "Total Zones Count", "Zones_Preview": "Zones Overview"}, inplace=True)
                     
-                    st.markdown("---")
                     display_df.insert(0, "Select", False)
-                    
-                    st.write(f"### 📋 Incoming Requests Overview ({len(display_df)} requests)")
-                    st.caption("Check the boxes to select requests. The downloaded file will contain detailed row-by-row data for each zone.")
-                    
-                    edited_display_df = st.data_editor(
-                        display_df,
-                        column_config={
-                            "Select": st.column_config.CheckboxColumn("Select", help="Select to download", default=False),
-                            "Date": st.column_config.TextColumn(disabled=True),
-                            "Vendor ID": st.column_config.TextColumn(disabled=True),
-                            "Vendor Name": st.column_config.TextColumn(disabled=True),
-                            "Total Zones Count": st.column_config.NumberColumn(disabled=True),
-                            "Zones Overview": st.column_config.TextColumn(disabled=True),
-                            "Status": st.column_config.TextColumn(disabled=True)
-                        },
-                        hide_index=True,
-                        use_container_width=True,
-                        key="admin_requests_editor"
-                    )
-                    
+                    edited_display_df = st.data_editor(display_df, hide_index=True, use_container_width=True)
                     selected_displays = edited_display_df[edited_display_df["Select"] == True]
                     
-                    st.markdown("---")
                     col_down1, col_down2 = st.columns([7, 3])
-                    
                     with col_down1:
-                        st.write("#### 💾 Download Selected Requests")
-                        if selected_displays.empty:
-                            st.info("Select one or more requests from the table above to download the detailed CSV.")
-                        else:
+                        if not selected_displays.empty:
                             selected_vendors_dates = selected_displays[["Vendor ID", "Date"]].apply(tuple, axis=1).tolist()
                             download_df = raw_df[raw_df[["Vendor ID", "Date"]].apply(tuple, axis=1).isin(selected_vendors_dates)]
-                            
                             csv_data = download_df.to_csv(index=False).encode('utf-8-sig')
                             
-                            if len(selected_displays) == 1:
-                                v_name = selected_displays.iloc[0]['Vendor Name']
-                                file_name = f"Detailed_Pricing_{v_name}.csv"
-                                st.success(f"1 Request selected. The file contains {len(download_df)} detailed zone rows.")
-                            else:
-                                file_name = "Combined_Detailed_Pricing.csv"
-                                st.success(f"{len(selected_displays)} Requests selected. The file contains {len(download_df)} combined zone rows.")
-                                
-                            st.download_button(
-                                label="📥 Download Detailed CSV (Row per Zone)",
-                                data=csv_data,
-                                file_name=file_name,
-                                mime="text/csv",
-                                type="primary"
-                            )
-                            
+                            file_name = f"Pricing_Request_{selected_displays.iloc[0]['Vendor Name']}.csv" if len(selected_displays) == 1 else "Combined_Detailed_Pricing.csv"
+                            st.download_button("📥 Download Detailed CSV", data=csv_data, file_name=file_name, mime="text/csv", type="primary")
                     with col_down2:
-                        st.write("#### 🗑️ Clear Database")
-                        st.warning("Delete all requests permanently.")
                         if st.button("Delete All Requests Data", type="secondary"):
-                            os.remove("vendor_pricing_requests.csv")
+                            os.remove(file_path)
                             st.rerun()
+            except:
+                st.error("Database error.")
+                if st.button("Force Clear"): os.remove(file_path); st.rerun()
 
-            except Exception as e:
-                st.error("A critical format error occurred with the database file.")
-                if st.button("Force Clear Corrupted Data", type="primary"):
-                    os.remove("vendor_pricing_requests.csv")
-                    st.rerun()
-        else:
-            st.info("No detailed requests received yet. Wait for vendors to submit.")
-
-# ==========================================
-# Tab 4: User Management (إدارة المستخدمين - للأدمن فقط)
-# ==========================================
-if is_admin:
     with tab4:
         st.header("👥 User Management (إدارة المستخدمين والصلاحيات)")
-        st.caption("من هنا يمكنك إضافة مسؤولين جدد (Admins) أو إنشاء حسابات للفيندورز وتحديد السلاسل/الفروع المسموح لهم برؤيتها فقط.")
-        
-        tab_u1, tab_u2 = st.tabs(["➕ إضافة مستخدم جديد", "📋 قائمة المستخدمين الحالية"])
+        tab_u1, tab_u2 = st.tabs(["➕ إضافة مستخدم جديد", "📋 قائمة المستخدمين"])
         
         with tab_u1:
-            st.subheader("إنشاء حساب مستخدم جديد")
-            
-            u_role = st.selectbox("نوع الحساب (Role):", ["vendor", "admin"], format_func=lambda x: "مسؤول نظام (Admin)" if x == "admin" else "مستخدم فيندور (Vendor User)")
-            
+            u_role = st.selectbox("نوع الحساب:", ["vendor", "admin"])
             with st.form("add_user_form"):
-                new_email = st.text_input("البريد الإلكتروني (Email):").strip().lower()
-                new_password = st.text_input("كلمة المرور (Password):").strip()
-                
-                access_type = "all"
-                selected_access_ids_str = "all"
+                new_email = st.text_input("البريد الإلكتروني:").strip().lower()
+                new_password = st.text_input("كلمة المرور:").strip()
+                access_type, selected_access_ids_str = "all", "all"
                 
                 if u_role == "vendor":
-                    st.markdown("---")
-                    st.write("**تحديد صلاحية الوصول للفيندور:**")
-                    access_choice = st.radio(
-                        "طريقة ربط الصلاحية:",
-                        ["سلسلة كاملة (Chain ID)", "فروع محددة (Vendor ID)"]
-                    )
-                    
-                    if access_choice == "سلسلة كاملة (Chain ID)":
+                    access_choice = st.radio("طريقة ربط الصلاحية:", ["Chain ID", "Vendor ID"])
+                    if access_choice == "Chain ID":
                         access_type = "Chain ID"
                         chains_df = df_vendors[["Chain Attributes Chain ID", "Chain Attributes Chain Name"]].drop_duplicates()
-                        chain_options = dict(zip(
-                            chains_df["Chain Attributes Chain ID"],
-                            chains_df["Chain Attributes Chain Name"] + " (" + chains_df["Chain Attributes Chain ID"] + ")"
-                        ))
-                        chosen_chains = st.multiselect("اختر السلسلة / السلاسل المسموح بها:", options=list(chain_options.keys()), format_func=lambda x: chain_options[x])
+                        chain_opts = dict(zip(chains_df["Chain Attributes Chain ID"], chains_df["Chain Attributes Chain Name"] + " (" + chains_df["Chain Attributes Chain ID"] + ")"))
+                        chosen_chains = st.multiselect("اختر السلاسل:", options=list(chain_opts.keys()), format_func=lambda x: chain_opts[x])
                         selected_access_ids_str = ", ".join(chosen_chains)
                     else:
                         access_type = "Vendor ID"
                         vendors_df = df_vendors[["Vendor Attributes Vendor Id", "Vendor Attributes Vendor Name (English)"]].drop_duplicates()
-                        vendor_options = dict(zip(
-                            vendors_df["Vendor Attributes Vendor Id"],
-                            vendors_df["Vendor Attributes Vendor Name (English)"] + " (" + vendors_df["Vendor Attributes Vendor Id"] + ")"
-                        ))
-                        chosen_vendors = st.multiselect("اختر الفروع / الفيندورز المسموح بها:", options=list(vendor_options.keys()), format_func=lambda x: vendor_options[x])
+                        vendor_opts = dict(zip(vendors_df["Vendor Attributes Vendor Id"], vendors_df["Vendor Attributes Vendor Name (English)"] + " (" + vendors_df["Vendor Attributes Vendor Id"] + ")"))
+                        chosen_vendors = st.multiselect("اختر الفروع:", options=list(vendor_opts.keys()), format_func=lambda x: vendor_opts[x])
                         selected_access_ids_str = ", ".join(chosen_vendors)
                 
-                submit_user = st.form_submit_button("💾 إنشاء الحساب وحفظ الصلاحيات", type="primary")
-                
-                if submit_user:
-                    if not new_email or not new_password:
-                        st.error("⚠️ يرجى إدخال البريد الإلكتروني وكلمة المرور.")
-                    elif u_role == "vendor" and not selected_access_ids_str:
-                        st.error("⚠️ يرجى تحديد فرع أو سلسلة واحدة على الأقل لهذا الفيندور.")
+                if st.form_submit_button("💾 إنشاء الحساب", type="primary"):
+                    if not new_email or not new_password: st.error("إملأ البيانات.")
+                    elif u_role == "vendor" and not selected_access_ids_str: st.error("اختر الصلاحيات.")
                     else:
-                        success, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str)
-                        if success:
-                            st.success(f"✅ {msg}")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {msg}")
+                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str)
+                        st.success(msg) if ok else st.error(msg)
+                        if ok: st.rerun()
 
         with tab_u2:
-            st.subheader("المستخدمون المسجلون حالياً")
             users_list_df = get_users_df()
-            
-            st.dataframe(
-                users_list_df[["email", "role", "access_type", "access_ids"]],
-                use_container_width=True,
-                column_config={
-                    "email": "البريد الإلكتروني",
-                    "role": "الصلاحية",
-                    "access_type": "نوع الربط",
-                    "access_ids": "المعرفات المصرح بها"
-                }
-            )
-            
-            st.markdown("---")
-            st.write("#### 🗑️ حذف مستخدم")
-            deletable_users = users_list_df[users_list_df["email"].str.lower() != "mahmoud.alaa.2@talabat.com"]["email"].tolist()
-            if deletable_users:
-                user_to_delete = st.selectbox("اختر المستخدم للحذف:", deletable_users)
-                if st.button("حذف هذا الحساب نهائياً", type="secondary"):
-                    ok, d_msg = delete_user(user_to_delete)
-                    if ok:
-                        st.success(f"✅ {d_msg}")
-                        st.rerun()
-                    else:
-                        st.error(d_msg)
-            else:
-                st.caption("لا يوجد مستخدمون إضافيون لحذفهم حالياً.")
+            st.dataframe(users_list_df, use_container_width=True)
+            deletable = users_list_df[users_list_df["email"].str.lower() != "mahmoud.alaa.2@talabat.com"]["email"].tolist()
+            if deletable:
+                to_del = st.selectbox("اختر المستخدم للحذف:", deletable)
+                if st.button("حذف الحساب", type="secondary"):
+                    ok, msg = delete_user(to_del)
+                    st.success(msg) if ok else st.error(msg)
+                    if ok: st.rerun()
