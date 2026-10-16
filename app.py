@@ -59,21 +59,19 @@ def load_data():
     gdf_a["area_size"] = gdf_a["geometry"].area
     
     # -------------------------------------------------------------
-    # إزالة المربعات الكبيرة الوهمية وسلاسل المطاعم المظلية (مثل MCD AUC)
+    # استبعاد فقط ما يبدأ بـ MCD أو McDonald's ومضلعات الجمهورية العامة (> 0.5)
+    # مع الإبقاء على كافة الكمبوندات، النوادي، والجامعات والأحياء السكنية كاملة
     # -------------------------------------------------------------
-    exclude_pattern = r"mcdonald|mcd |mcd\b|restaurants|charit|university|club"
-    mask_exclude = gdf_a["Delivery Location Area Name"].str.contains(exclude_pattern, case=False, na=False)
+    mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"^mcd|^mcdonald", case=False, na=False)
+    gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
     
-    # استبعاد مضلعات السلاسل والمضلعات الضخمة التي تبتلع المناطق السكنية
-    gdf_a = gdf_a[(~mask_exclude) & (gdf_a["area_size"] < 0.003)].copy()
-    
-    # الترتيب من الأكبر للأصغر حتى تُرسم المناطق الأصغر في الواجهة وتكون لها أولوية النقر
+    # الترتيب تنازلي (الأكبر أولاً) حتى تُرسم المناطق الكبيرة في الخلفية والصغيرة في الأعلى
     gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
     
     centroids = gdf_a.geometry.centroid
     gdf_a["centroid_lat"] = centroids.y
     gdf_a["centroid_lng"] = centroids.x
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0003, preserve_topology=True)
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
     return df_v, gdf_a
 
 df_vendors, gdf_areas = load_data()
@@ -83,7 +81,6 @@ def get_nearby_polygons(lat, lng, radius_km):
     v_point = Point(lng, lat)
     radius_deg = radius_km / 111.0
     nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
-    # فرز تصاعدي للمساحة عند استخراج المناطق المحيطة
     return gdf_areas[nearby_mask].copy()
 
 def save_detailed_request(vendor_id, vendor_name, edited_df):
@@ -107,7 +104,7 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 tab1, tab2, tab3 = st.tabs(["🗺️ Overview Map (Admin)", "🛒 Vendor Portal", "📥 Change Requests (Admin)"])
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (لوحة المراقبة مع زر التفعيل/التعطيل)
 # ==========================================
 with tab1:
     st.header("Zones & Vendors Simulation Dashboard")
@@ -187,7 +184,7 @@ with tab1:
             st_folium(m, width="100%", height=650, key="main_map_admin", returned_objects=[])
 
 # ==========================================
-# Tab 2: Vendor Portal (الأولوية للمربعات الصغيرة)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
@@ -206,10 +203,10 @@ with tab2:
             v_city = v_row["Vendor Attributes Vendor City"]
             st.success(f"Welcome: **{v_name}** | City: {v_city}")
 
-            map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=35, value=8, step=1)
+            map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=35, value=10, step=1)
             portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
             
-            # ترتيب من الأكبر للأصغر لضمان أن المربعات الصغيرة تُطبع فوق المربعات الأكبر في الـ SVG
+            # ترتيب من الأكبر للأصغر لضمان أن المربعات الصغيرة تُرسم فوق المربعات الأكبر
             portal_areas = portal_areas.sort_values(by="area_size", ascending=False)
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist())
 
@@ -230,7 +227,7 @@ with tab2:
             # ---------------- عمود الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
-                st.caption("Click any small sub-zone directly on the map to add it to the search box.")
+                st.caption("Click any zone directly on the map to add it to the search box.")
 
                 v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
                 folium.Marker(
@@ -264,32 +261,32 @@ with tab2:
                     returned_objects=["last_clicked", "last_object_clicked"]
                 )
 
-                # التقاط النقرة مع إعطاء الأولوية القصوى للمربعات الصغيرة
+                # معالجة النقر بدقة تامة لإضافة المنطقة لمربع البحث
                 if map_data:
                     clicked_zone = None
                     sig = None
 
-                    # فحص الإحداثيات وفرز المناطق المتقاطعة تصاعدياً لاختيار أصغر مضلع دقيق
-                    if map_data.get("last_clicked"):
+                    # 1. فحص كائن المضلع المضغوط مباشرة
+                    obj_clicked = map_data.get("last_object_clicked")
+                    if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
+                        clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
+                        sig = f"obj_{clicked_zone}"
+
+                    # 2. فحص إحداثيات النقطة إذا لم يعد الكائن المباشر
+                    if not clicked_zone and map_data.get("last_clicked"):
                         c = map_data["last_clicked"]
                         if isinstance(c, dict) and "lat" in c and "lng" in c:
                             sig = f"coords_{c['lat']:.5f}_{c['lng']:.5f}"
                             pt = Point(c["lng"], c["lat"])
-                            # هنا الترتيب تصاعدي: أصغر منطقة سكنية دقيقة أولاً
                             matches = portal_areas[portal_areas.geometry.contains(pt)].sort_values(by="area_size", ascending=True)
                             if matches.empty:
                                 dists = portal_areas.geometry.distance(pt)
-                                if not dists.empty and dists.min() < 0.003:
+                                if not dists.empty and dists.min() < 0.005:
                                     matches = portal_areas.loc[[dists.idxmin()]]
                             if not matches.empty:
                                 clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
 
-                    if not clicked_zone and map_data.get("last_object_clicked"):
-                        obj_clicked = map_data.get("last_object_clicked")
-                        if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
-                            clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
-                            sig = f"obj_{clicked_zone}"
-
+                    # إضافة أو حذف المنطقة من قائمة مربع البحث فوراً
                     if clicked_zone and sig != st.session_state.get("last_click_sig"):
                         st.session_state["last_click_sig"] = sig
                         curr_search = list(st.session_state.get("vendor_multiselect", []))
@@ -301,6 +298,7 @@ with tab2:
                         st.session_state["vendor_multiselect"] = curr_search
                         st.session_state["ms_version"] += 1
                         st.session_state["show_pricing_table"] = False
+                        st.rerun()
 
             # ---------------- عمود مربع البحث ----------------
             with col_form:
