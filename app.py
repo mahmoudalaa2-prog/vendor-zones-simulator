@@ -154,6 +154,20 @@ with tab1:
                 
             m = folium.Map(location=center, zoom_start=zoom)
             
+            # منع المستطيل الأسود في صفحة الإدارة
+            css_no_box = """
+            <style>
+            .leaflet-interactive:focus,
+            path.leaflet-interactive:focus,
+            .leaflet-container :focus,
+            svg:focus {
+                outline: none !important;
+                box-shadow: none !important;
+            }
+            </style>
+            """
+            m.get_root().html.add_child(folium.Element(css_no_box))
+            
             if show_zones and not gdf_areas.empty:
                 folium.GeoJson(
                     gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
@@ -246,10 +260,40 @@ with tab2:
                     else:
                         return {"fillColor": "#3388ff", "color": "#004085", "weight": 1.2, "fillOpacity": 0.18}
 
+                # CSS لإلغاء المستطيل الأسود تماماً وتمييز حدود المنطقة الحقيقية فقط
+                css_fix_box = """
+                <style>
+                /* إزالة المستطيل الأسود (Focus Outline) نهائياً */
+                .leaflet-interactive:focus,
+                path.leaflet-interactive:focus,
+                .leaflet-container :focus,
+                svg:focus {
+                    outline: none !important;
+                    box-shadow: none !important;
+                }
+                path.leaflet-interactive:hover {
+                    cursor: pointer;
+                }
+                /* عند النقر: إبراز نفس شكل المضلع بحدود حمراء دقيقة بدون أي مستطيل */
+                path.leaflet-interactive:focus {
+                    outline: none !important;
+                    stroke: #e74c3c !important;
+                    stroke-width: 3.5px !important;
+                    stroke-opacity: 1 !important;
+                }
+                </style>
+                """
+                v_map.get_root().html.add_child(folium.Element(css_fix_box))
+
                 folium.GeoJson(
                     portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                     name="Delivery Zones",
                     style_function=vendor_zone_style,
+                    highlight_function=lambda feature: {
+                        "color": "#e74c3c",
+                        "weight": 3.5,
+                        "fillOpacity": 0.35
+                    },
                     tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Zone: "])
                 ).add_to(v_map)
 
@@ -261,19 +305,13 @@ with tab2:
                     returned_objects=["last_clicked", "last_object_clicked"]
                 )
 
-                # معالجة النقر بدقة تامة لإضافة المنطقة لمربع البحث
+                # التقاط النقرة بدقة
                 if map_data:
                     clicked_zone = None
                     sig = None
 
-                    # 1. فحص كائن المضلع المضغوط مباشرة
-                    obj_clicked = map_data.get("last_object_clicked")
-                    if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
-                        clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
-                        sig = f"obj_{clicked_zone}"
-
-                    # 2. فحص إحداثيات النقطة إذا لم يعد الكائن المباشر
-                    if not clicked_zone and map_data.get("last_clicked"):
+                    # 1. فحص إحداثيات النقطة وفرز المناطق المتقاطعة تصاعدياً لاختيار أصغر مضلع
+                    if map_data.get("last_clicked"):
                         c = map_data["last_clicked"]
                         if isinstance(c, dict) and "lat" in c and "lng" in c:
                             sig = f"coords_{c['lat']:.5f}_{c['lng']:.5f}"
@@ -281,12 +319,18 @@ with tab2:
                             matches = portal_areas[portal_areas.geometry.contains(pt)].sort_values(by="area_size", ascending=True)
                             if matches.empty:
                                 dists = portal_areas.geometry.distance(pt)
-                                if not dists.empty and dists.min() < 0.005:
+                                if not dists.empty and dists.min() < 0.003:
                                     matches = portal_areas.loc[[dists.idxmin()]]
                             if not matches.empty:
                                 clicked_zone = matches.iloc[0]["Delivery Location Area Name"]
 
-                    # إضافة أو حذف المنطقة من قائمة مربع البحث فوراً
+                    # 2. فحص كائن المضلع المضغوط كخيار بديل
+                    if not clicked_zone and map_data.get("last_object_clicked"):
+                        obj_clicked = map_data.get("last_object_clicked")
+                        if obj_clicked and isinstance(obj_clicked, dict) and "properties" in obj_clicked:
+                            clicked_zone = obj_clicked["properties"].get("Delivery Location Area Name")
+                            sig = f"obj_{clicked_zone}"
+
                     if clicked_zone and sig != st.session_state.get("last_click_sig"):
                         st.session_state["last_click_sig"] = sig
                         curr_search = list(st.session_state.get("vendor_multiselect", []))
