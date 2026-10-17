@@ -385,7 +385,7 @@ if is_admin:
         map_active = st.toggle("⚡ تفعيل خريطة الإدارة العامة (Admin Map)", value=False, key="toggle_admin_map")
         
         if not map_active:
-            st.info("⏸️ **خريطة المراقبة العامة معطلة لتوفير أقصى سرعة واستجابة فورية لبوابة الفيندورز.**\n\nقم بتفعيل الزر أعلاه عند الحاجة لاستعراض ومحاكاة التغطية العامة.")
+            st.info("⏸️ خريطة المراقبة العامة معطلة لتوفير أقصى سرعة لبوابة الفيندورز. فَعِّل الزر أعلاه عند الحاجة لاستعراض التغطية العامة.")
         else:
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.5, 1.8, 0.8])
             
@@ -859,4 +859,147 @@ with tab2:
                         "Classification": st.column_config.TextColumn("نوع المنطقة", disabled=True),
                         "Action": st.column_config.SelectboxColumn(
                             "الحالة / الإجراء",
-                            help="اختر ما إذا
+                            options=["نشط (Active)", "إلغاء التفعيل (Deactivate)"],
+                            required=True
+                        ),
+                        "Distance (km)": st.column_config.NumberColumn("المسافة (كم)", disabled=True),
+                        "Delivery Time": st.column_config.TextColumn("وقت التوصيل المقدر (e.g., 45 mins)"),
+                        "Delivery Fees": st.column_config.NumberColumn("رسوم التوصيل (EGP)")
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="pricing_editor"
+                )
+
+                if st.button("✅ Finalize & Send to Admin", type="primary"):
+                    active_items = edited_pricing_df[edited_pricing_df["Action"] == "نشط (Active)"]
+                    if active_items["Delivery Time"].eq("").any() or active_items["Delivery Fees"].isnull().any():
+                        st.error("⚠️ يرجى تحديد وقت التوصيل ورسوم التوصيل لجميع المناطق النشطة (Active) قبل التأكيد.")
+                    else:
+                        submission_df = edited_pricing_df.copy()
+                        submission_df["Final_Status"] = submission_df.apply(
+                            lambda r: "Deactivated" if r["Action"] == "إلغاء التفعيل (Deactivate)" else (
+                                "Active (New)" if "جديدة" in r["Classification"] else "Active (Existing)"
+                            ),
+                            axis=1
+                        )
+                        save_detailed_request(v_id_clean, v_name, submission_df)
+                        st.success(f"🎉 تم إرسال الطلب بنجاح! تم اعتماد ({len(active_items)}) منطقة نشطة و({len(edited_pricing_df) - len(active_items)}) منطقة ملغاة.")
+
+# ==========================================
+# Tab 3 & 4: Admin Sections
+# ==========================================
+if is_admin:
+    with tab3:
+        st.header("📥 Vendor Pricing & Coverage Requests")
+        file_path = "vendor_pricing_requests.csv"
+        if os.path.exists(file_path):
+            try:
+                raw_df = pd.read_csv(file_path)
+                if "Zone" not in raw_df.columns:
+                    st.warning("⚠️ تم اكتشاف ملف بتنسيق قديم. يرجى إعادة تعيين البيانات.")
+                    os.remove(file_path)
+                    st.rerun()
+                else:
+                    raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
+                    
+                    f_col1, f_col2 = st.columns(2)
+                    all_req_names = ["All"] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
+                    filter_name = f_col1.selectbox("تصفية باسم الفرع:", all_req_names, key="admin_req_name")
+                    
+                    temp_req_ids = raw_df[raw_df["Vendor Name"] == filter_name]["Vendor ID"].dropna().unique().tolist() if filter_name != "All" else raw_df["Vendor ID"].dropna().unique().tolist()
+                    filter_id = f_col2.selectbox("تصفية بكود الفرع:", ["All"] + sorted(temp_req_ids), key="admin_req_id")
+                    
+                    filtered_raw = raw_df.copy()
+                    if filter_name != "All":
+                        filtered_raw = filtered_raw[filtered_raw["Vendor Name"] == filter_name]
+                    if filter_id != "All":
+                        filtered_raw = filtered_raw[filtered_raw["Vendor ID"] == filter_id]
+                        
+                    display_df = filtered_raw.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
+                        Total_Zones=("Zone", "count"),
+                        Zones_Preview=("Zone", lambda x: ", ".join(x.head(3)) + ("..." if len(x) > 3 else ""))
+                    ).reset_index()
+                    display_df.rename(columns={"Total_Zones": "إجمالي المناطق", "Zones_Preview": "نظرة عامة على المناطق"}, inplace=True)
+                    
+                    display_df.insert(0, "Select", False)
+                    edited_display_df = st.data_editor(display_df, hide_index=True, use_container_width=True)
+                    selected_displays = edited_display_df[edited_display_df["Select"] == True]
+                    
+                    col_down1, col_down2 = st.columns([7, 3])
+                    with col_down1:
+                        if not selected_displays.empty:
+                            selected_vendors_dates = selected_displays[["Vendor ID", "Date"]].apply(tuple, axis=1).tolist()
+                            download_df = raw_df[raw_df[["Vendor ID", "Date"]].apply(tuple, axis=1).isin(selected_vendors_dates)]
+                            csv_data = download_df.to_csv(index=False).encode('utf-8-sig')
+                            
+                            file_name = f"Pricing_Request_{selected_displays.iloc[0]['Vendor Name']}.csv" if len(selected_displays) == 1 else "Combined_Detailed_Pricing.csv"
+                            st.download_button("📥 Download Detailed CSV", data=csv_data, file_name=file_name, mime="text/csv", type="primary")
+                    with col_down2:
+                        if st.button("حذف جميع طلبات التعديل المسجلة", type="secondary"):
+                            os.remove(file_path)
+                            st.rerun()
+            except Exception as e:
+                st.error("حدث خطأ أثناء قراءة سجلات الطلبات.")
+                if st.button("إعادة تعيين قاعدة البيانات"):
+                    os.remove(file_path)
+                    st.rerun()
+
+    with tab4:
+        st.header("👥 User Management (إدارة المستخدمين والصلاحيات)")
+        tab_u1, tab_u2 = st.tabs(["➕ إضافة مستخدم جديد", "📋 قائمة المستخدمين"])
+        
+        with tab_u1:
+            u_role = st.selectbox("نوع الحساب:", ["vendor", "admin"])
+            with st.form("add_user_form"):
+                new_email = st.text_input("البريد الإلكتروني:").strip().lower()
+                new_password = st.text_input("كلمة المرور:").strip()
+                access_type, selected_access_ids_str = "all", "all"
+                
+                if u_role == "vendor":
+                    access_choice = st.radio("طريقة ربط الصلاحية:", ["Chain ID", "Vendor ID"])
+                    if access_choice == "Chain ID":
+                        access_type = "Chain ID"
+                        if not df_vendors.empty and "clean_cid" in df_vendors.columns:
+                            chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
+                            chains_df = chains_df[chains_df["clean_cid"] != ""]
+                            chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
+                            chosen_chains = st.multiselect("اختر السلاسل المصرح بها:", options=list(chain_opts.keys()), format_func=lambda x: chain_opts[x])
+                            selected_access_ids_str = ", ".join(chosen_chains)
+                        else:
+                            st.warning("بيانات السلاسل غير متوفرة حالياً.")
+                            selected_access_ids_str = ""
+                    else:
+                        access_type = "Vendor ID"
+                        if not df_vendors.empty and "clean_vid" in df_vendors.columns:
+                            vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
+                            vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
+                            vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
+                            chosen_vendors = st.multiselect("اختر الفروع المصرح بها:", options=list(vendor_opts.keys()), format_func=lambda x: vendor_opts[x])
+                            selected_access_ids_str = ", ".join(chosen_vendors)
+                        else:
+                            st.warning("بيانات الفروع غير متوفرة حالياً.")
+                            selected_access_ids_str = ""
+                
+                if st.form_submit_button("💾 إنشاء الحساب", type="primary"):
+                    if not new_email or not new_password:
+                        st.error("يرجى ملء جميع الحقول المطلوبة.")
+                    elif u_role == "vendor" and not selected_access_ids_str:
+                        st.error("يرجى اختيار فرع أو سلسلة واحدة على الأقل.")
+                    else:
+                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str)
+                        st.success(msg) if ok else st.error(msg)
+                        if ok:
+                            st.rerun()
+
+        with tab_u2:
+            users_list_df = get_users_df()
+            st.dataframe(users_list_df, use_container_width=True)
+            deletable = users_list_df[users_list_df["email"].str.lower() != "mahmoud.alaa.2@talabat.com"]["email"].tolist()
+            if deletable:
+                to_del = st.selectbox("اختر المستخدم للحذف:", deletable)
+                if st.button("حذف الحساب", type="secondary"):
+                    ok, msg = delete_user(to_del)
+                    st.success(msg) if ok else st.error(msg)
+                    if ok:
+                        st.rerun()
