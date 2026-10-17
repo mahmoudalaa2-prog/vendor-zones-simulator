@@ -131,7 +131,7 @@ def read_google_sheet_csv(url):
         return pd.DataFrame()
 
 # ==========================================
-# 4. جلب وتجهيز البيانات (100% من شيت Vendor Location)
+# 4. جلب وتجهيز البيانات
 # ==========================================
 @st.cache_data(ttl=1800)
 def load_data():
@@ -157,7 +157,6 @@ def load_data():
         df_v["clean_chain_name"] = df_v[cname_col].astype(str).str.strip() if cname_col else ""
         df_v["clean_city"] = df_v[city_col].astype(str).str.strip() if city_col else ""
 
-        # استخراج الإحداثيات الحقيقية فقط دون إحداثيات وهمية
         map_loc_col = get_col(df_v, ["Vendor Attributes Vendor Map Location", "Map Location", "Location", "Coordinates"])
         lat_col = get_col(df_v, ["Latitude", "lat", "Lat"])
         lng_col = get_col(df_v, ["Longitude", "lng", "Lng", "Long", "lon"])
@@ -175,20 +174,25 @@ def load_data():
 
         df_v = df_v[df_v["clean_vid"] != ""].copy()
 
-    # تصفية شيت التوصيل: الإبقاء فقط على الفيندورز الموجودين في Vendor Location
+    # معالجة وتصفية شيت التوصيل
     if not df_d.empty and not df_v.empty:
         d_vid_col = get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         d_cid_col = get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
-        
+        d_zone_col = get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
+        d_time_col = get_col(df_d, ["Delivery Time", "Time", "Duration"])
+        d_fee_col = get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
+
+        df_d["clean_vid"] = df_d[d_vid_col].apply(normalize_id) if d_vid_col else ""
+        df_d["clean_cid"] = df_d[d_cid_col].apply(normalize_id) if d_cid_col else ""
+        df_d["clean_zone"] = df_d[d_zone_col].astype(str).str.strip() if d_zone_col else ""
+        df_d["clean_time"] = df_d[d_time_col].astype(str).str.strip() if d_time_col else ""
+        df_d["clean_fee"] = df_d[d_fee_col].astype(str).str.strip() if d_fee_col else ""
+
         valid_vids = set(df_v["clean_vid"].unique()) - {""}
         valid_cids = set(df_v["clean_cid"].unique()) - {""}
-        
-        if d_vid_col:
-            df_d["clean_vid"] = df_d[d_vid_col].apply(normalize_id)
-            df_d = df_d[df_d["clean_vid"].isin(valid_vids)].copy()
-        elif d_cid_col:
-            df_d["clean_cid"] = df_d[d_cid_col].apply(normalize_id)
-            df_d = df_d[df_d["clean_cid"].isin(valid_cids)].copy()
+
+        mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
+        df_d = df_d[mask].copy()
 
     # معالجة شيت المناطق
     if not df_a.empty:
@@ -255,6 +259,45 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
     else:
         save_df.to_csv(file_name, index=False)
 
+def build_vendor_popup_html(v_row, df_delivery):
+    v_id = str(v_row["clean_vid"])
+    c_id = str(v_row.get("clean_cid", ""))
+    v_name = v_row.get("clean_name", "")
+    c_name = v_row.get("clean_chain_name", "")
+    v_city = v_row.get("clean_city", "")
+
+    match_d = pd.DataFrame()
+    if not df_delivery.empty:
+        match_d = df_delivery[df_delivery["clean_vid"] == v_id]
+        if match_d.empty and c_id:
+            match_d = df_delivery[df_delivery["clean_cid"] == c_id]
+
+    html = f"""<div style='font-family: Arial, sans-serif; width: 280px; font-size: 13px;'>
+<h4 style='margin:0 0 5px 0; color:#0d6efd;'>🏬 {v_name}</h4>
+<b>Vendor ID:</b> <code>{v_id}</code><br>
+<b>Chain:</b> {c_name} (<code>{c_id}</code>)<br>
+<b>City:</b> {v_city}<br>
+<hr style='margin:6px 0; border:0; border-top:1px solid #ddd;'>"""
+
+    if not match_d.empty and "clean_zone" in match_d.columns:
+        zone_count = len(match_d["clean_zone"].dropna().unique())
+        html += f"<b style='color:#198754;'>🛵 مناطق التوصيل ({zone_count}):</b>"
+        html += "<div style='max-height:150px; overflow-y:auto; margin-top:5px; border:1px solid #dee2e6; border-radius:4px;'>"
+        html += "<table style='width:100%; font-size:11px; border-collapse:collapse;'>"
+        html += "<tr style='background:#f8f9fa; text-align:left; position:sticky; top:0;'><th style='padding:4px; border-bottom:1px solid #ddd;'>المنطقة</th><th style='padding:4px; border-bottom:1px solid #ddd;'>الوقت</th><th style='padding:4px; border-bottom:1px solid #ddd;'>السعر</th></tr>"
+        for _, r in match_d.iterrows():
+            z = r.get("clean_zone", "")
+            t = r.get("clean_time", "-")
+            f = r.get("clean_fee", "-")
+            if z:
+                html += f"<tr style='border-bottom:1px solid #f1f1f1;'><td style='padding:3px;'>{z}</td><td style='padding:3px;'>{t}</td><td style='padding:3px;'>{f}</td></tr>"
+        html += "</table></div>"
+    else:
+        html += "<div style='color:#6c757d; font-size:12px; margin-top:4px;'>لا توجد مناطق توصيل مسجلة لهذا الفرع.</div>"
+
+    html += "</div>"
+    return html
+
 # ==========================================
 # 5. شاشة تسجيل الدخول (Authentication)
 # ==========================================
@@ -298,7 +341,7 @@ with st.sidebar:
     if not is_admin:
         st.write(f"📌 **نوع الصلاحية:** `{current_user['access_type']}`")
     st.markdown("---")
-    st.metric("🏬 إجمالي الفيندورز بالشيت", len(df_vendors))
+    st.metric("🏬 إجمالي الفيندورز", len(df_vendors))
     st.metric("🗺️ إجمالي المناطق", len(gdf_areas))
     if st.button("🔄 مزامنة وتحديث الشيتات الآن", use_container_width=True):
         st.cache_data.clear()
@@ -314,80 +357,151 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (سريعة، تدعم السلاسل، وتعرض مناطق التوصيل)
 # ==========================================
 if is_admin:
     with tab1:
-        st.header("Zones & Vendors Simulation Dashboard")
-        map_active = st.toggle("⚡ Activate Admin Map (تشغيل الخريطة الكبيرة)", value=False, key="toggle_admin_map")
+        st.header("🗺️ Admin Overview & Simulation Map")
+        st.caption("خريطة تفاعلية خفيفة وسريعة: اضغط على أي فيندور لعرض مناطق توصيله، أو اختر سلسلة بالكامل لعرض فروعها ومناطقها.")
         
-        if not map_active:
-            st.info("⏸️ **خريطة المراقبة الكبيرة معطلة لتسريع الموقع بنسبة 100%.** فَعِّل الزر بالأعلى عندما تحتاج لمراجعة الخريطة العامة.")
+        f_col1, f_col2, f_col3 = st.columns([1.5, 1.5, 2])
+        
+        with f_col1:
+            all_cities = ["All Cities"] + sorted([c for c in df_vendors["clean_city"].unique() if c])
+            selected_city = st.selectbox("1. تصفية بالمحافظة/المدينة:", options=all_cities, key="admin_map_city")
+
+        city_df = df_vendors if selected_city == "All Cities" else df_vendors[df_vendors["clean_city"] == selected_city]
+
+        with f_col2:
+            chains_in_city = city_df[["clean_cid", "clean_chain_name"]].drop_duplicates()
+            chains_in_city = chains_in_city[chains_in_city["clean_cid"] != ""]
+            chain_map = dict(zip(chains_in_city["clean_cid"], chains_in_city["clean_chain_name"] + " (" + chains_in_city["clean_cid"] + ")"))
+            chain_options = ["All Chains (كل السلاسل)"] + list(chain_map.keys())
+            
+            selected_chain = st.selectbox(
+                "2. إظهار Chain كاملة بمفردها:",
+                options=chain_options,
+                format_func=lambda x: "All Chains (كل السلاسل)" if x == "All Chains (كل السلاسل)" else chain_map.get(x, x),
+                key="admin_map_chain"
+            )
+
+        if selected_chain != "All Chains (كل السلاسل)":
+            filtered_vendors = city_df[city_df["clean_cid"] == selected_chain]
         else:
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                st.subheader("Filter Controls")
-                all_cities = ["All"] + sorted([c for c in df_vendors["clean_city"].unique() if c])
-                selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
-                st.markdown("---")
-                
-                temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["clean_city"] == selected_city]
-                vendor_names = ["All"] + sorted([n for n in temp_df["clean_name"].unique() if n])
-                selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
-                
-                vendor_ids = ["All"] + sorted([v for v in temp_df["clean_vid"].unique() if v])
-                selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
-                
-                chain_ids = ["All"] + sorted([c for c in temp_df["clean_cid"].unique() if c])
-                selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
-                
-                show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
-                if st.button("Reset Filters", key="reset_btn"):
-                    st.session_state.clear()
-                    st.rerun()
+            filtered_vendors = city_df
+
+        with f_col3:
+            vendor_opts = dict(zip(
+                filtered_vendors["clean_vid"],
+                filtered_vendors["clean_name"] + " (ID: " + filtered_vendors["clean_vid"] + ")"
+            ))
+            focus_vendor_options = ["None (عرض كل فروع التصفية)"] + list(vendor_opts.keys())
+            
+            focused_vid = st.selectbox(
+                "3. تحديد فيندور لرسم مضلعات مناطقه والتركيز عليه:",
+                options=focus_vendor_options,
+                format_func=lambda x: "None (عرض كل فروع التصفية)" if x == "None (عرض كل فروع التصفية)" else vendor_opts.get(x, x),
+                key="admin_map_focus_vid"
+            )
+
+        # خيار إظهار مضلعات التوصيل للسلسلة
+        c_chk1, c_chk2 = st.columns([2, 3])
+        show_chain_polygons = False
+        with c_chk1:
+            if selected_chain != "All Chains (كل السلاسل)" and focused_vid == "None (عرض كل فروع التصفية)":
+                show_chain_polygons = st.checkbox("🗺️ رسم كل مضلعات مناطق توصيل فروع هذه السلسلة", value=True)
+
+        plot_vendors = filtered_vendors.dropna(subset=["lat", "lng"]).copy()
+
+        # حساب مركز الخريطة ومستوى الزووم
+        if focused_vid != "None (عرض كل فروع التصفية)":
+            f_v_row = plot_vendors[plot_vendors["clean_vid"] == focused_vid]
+            if not f_v_row.empty:
+                map_center = [f_v_row.iloc[0]["lat"], f_v_row.iloc[0]["lng"]]
+                zoom_lvl = 13
+            else:
+                map_center = [30.0444, 31.2357]
+                zoom_lvl = 11
+        elif not plot_vendors.empty:
+            map_center = [plot_vendors["lat"].mean(), plot_vendors["lng"].mean()]
+            zoom_lvl = 12 if selected_chain != "All Chains (كل السلاسل)" else 10 if selected_city != "All Cities" else 7
+        else:
+            map_center = [30.0444, 31.2357]
+            zoom_lvl = 7
+
+        m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
+        css_style = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;} path.leaflet-interactive:hover {cursor: pointer;}</style>"
+        m_admin.get_root().html.add_child(folium.Element(css_style))
+
+        # -------------------------------------------------------------
+        # رسم مضلعات التوصيل المستهدفة فقط (سرعة فائقة وخفة تامة)
+        # -------------------------------------------------------------
+        if not gdf_areas.empty and not df_delivery.empty:
+            target_zones = []
+            
+            # 1. إذا تم تحديد فيندور بعينه
+            if focused_vid != "None (عرض كل فروع التصفية)":
+                v_row_f = plot_vendors[plot_vendors["clean_vid"] == focused_vid].iloc[0]
+                m_del = df_delivery[df_delivery["clean_vid"] == focused_vid]
+                if m_del.empty and v_row_f["clean_cid"]:
+                    m_del = df_delivery[df_delivery["clean_cid"] == v_row_f["clean_cid"]]
+                if not m_del.empty and "clean_zone" in m_del.columns:
+                    target_zones = m_del["clean_zone"].dropna().unique().tolist()
                     
-            with col2:
-                filtered_v = df_vendors.copy()
-                if selected_city != "All": filtered_v = filtered_v[filtered_v["clean_city"] == selected_city]
-                if selected_name != "All": filtered_v = filtered_v[filtered_v["clean_name"] == selected_name]
-                if selected_v_id != "All": filtered_v = filtered_v[filtered_v["clean_vid"] == selected_v_id]
-                if selected_chain != "All": filtered_v = filtered_v[filtered_v["clean_cid"] == selected_chain]
+            # 2. إذا تم اختيار سلسلة كاملة مع خيار رسم مضلعاتها
+            elif selected_chain != "All Chains (كل السلاسل)" and show_chain_polygons:
+                chain_vids = plot_vendors["clean_vid"].unique().tolist()
+                m_del = df_delivery[(df_delivery["clean_cid"] == selected_chain) | (df_delivery["clean_vid"].isin(chain_vids))]
+                if not m_del.empty and "clean_zone" in m_del.columns:
+                    target_zones = m_del["clean_zone"].dropna().unique().tolist()
+
+            if target_zones:
+                zone_lookup = {z.strip().lower(): z for z in gdf_areas["Delivery Location Area Name"]}
+                canonical_targets = [zone_lookup[t.strip().lower()] for t in target_zones if t.strip().lower() in zone_lookup]
                 
-                # رسم الفيندورز التي تملك إحداثيات حقيقية فقط
-                plot_v = filtered_v.dropna(subset=["lat", "lng"])
-                    
-                if not plot_v.empty:
-                    center = [plot_v["lat"].mean(), plot_v["lng"].mean()]
-                    zoom = 14 if (selected_name != "All" or selected_v_id != "All") else 12 if selected_chain != "All" else 11 if selected_city != "All" else 6
-                else:
-                    center = [30.0444, 31.2357]
-                    zoom = 6
-                    
-                m = folium.Map(location=center, zoom_start=zoom)
-                css_no_box = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;}</style>"
-                m.get_root().html.add_child(folium.Element(css_no_box))
+                matched_polygons = gdf_areas[gdf_areas["Delivery Location Area Name"].isin(canonical_targets)]
                 
-                if show_zones and not gdf_areas.empty:
+                if not matched_polygons.empty:
                     folium.GeoJson(
-                        gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                        matched_polygons[["Delivery Location Area Name", "geometry"]].to_json(),
                         name="Delivery Zones",
-                        style_function=lambda feature: {"fillColor": "#0055ff", "color": "#002266", "weight": 1.0, "fillOpacity": 0.15},
-                        tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
-                    ).add_to(m)
-                    
-                if not plot_v.empty:
-                    cluster = MarkerCluster().add_to(m)
-                    is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
-                    for _, row in plot_v.iterrows():
-                        popup_html = f"<b>{row.get('clean_name', '')}</b><br><b>Vendor ID:</b> {row.get('clean_vid', '')}<br><b>Chain ID:</b> {row.get('clean_cid', '')}"
-                        folium.Marker(
-                            location=[row['lat'], row['lng']],
-                            popup=folium.Popup(popup_html, max_width=300),
-                            tooltip=row.get("clean_name", ""),
-                            icon=folium.Icon(color="green" if is_searched else "red", icon="star" if is_searched else "shopping-cart", prefix="fa")
-                        ).add_to(cluster)
-                        
-                st_folium(m, width="100%", height=650, key="main_map_admin", returned_objects=[])
+                        style_function=lambda feature: {
+                            "fillColor": "#28a745",
+                            "color": "#155724",
+                            "weight": 2.0,
+                            "fillOpacity": 0.45
+                        },
+                        highlight_function=lambda feature: {"color": "#ffc107", "weight": 3.5, "fillOpacity": 0.65},
+                        tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["منطقة توصيل: "]),
+                        popup=folium.GeoJsonPopup(fields=["Delivery Location Area Name"], aliases=["Zone: "])
+                    ).add_to(m_admin)
+
+        # -------------------------------------------------------------
+        # رسم الفيندورز عبر MarkerCluster
+        # -------------------------------------------------------------
+        if not plot_vendors.empty:
+            cluster = MarkerCluster().add_to(m_admin)
+            
+            for _, row in plot_vendors.iterrows():
+                is_focused = (focused_vid != "None (عرض كل فروع التصفية)" and row["clean_vid"] == focused_vid)
+                popup_content = build_vendor_popup_html(row, df_delivery)
+                
+                if is_focused:
+                    folium.Marker(
+                        location=[row['lat'], row['lng']],
+                        popup=folium.Popup(popup_content, max_width=320),
+                        tooltip=f"⭐ {row['clean_name']} (اضغط لعرض مناطق التوصيل)",
+                        icon=folium.Icon(color="green", icon="star", prefix="fa")
+                    ).add_to(m_admin)
+                else:
+                    folium.Marker(
+                        location=[row['lat'], row['lng']],
+                        popup=folium.Popup(popup_content, max_width=320),
+                        tooltip=f"{row['clean_name']} ({row['clean_vid']})",
+                        icon=folium.Icon(color="blue", icon="cutlery", prefix="fa")
+                    ).add_to(cluster)
+
+        st_folium(m_admin, width="100%", height=620, key=f"admin_overview_map_{selected_city}_{selected_chain}_{focused_vid}", returned_objects=[])
 
 # ==========================================
 # Tab 2: Vendor Portal (100% مطابق لشيت Vendor Location)
@@ -446,7 +560,6 @@ with tab2:
             v_chain_id = v_row["clean_cid"]
             v_city = v_row["clean_city"]
             
-            # التحقق الصارم من وجود إحداثيات حقيقية في الشيت
             has_real_coords = pd.notna(v_row["lat"]) and pd.notna(v_row["lng"])
             
             st.success(f"Welcome: **{v_name}** | City: {v_city} | Vendor ID: `{v_id_clean}` | Chain ID: `{v_chain_id}`")
@@ -467,9 +580,6 @@ with tab2:
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
             zone_lookup = {z.strip().lower(): z for z in all_available_zones}
 
-            # -------------------------------------------------------------
-            # استرجاع البيانات المحفوظة مسبقاً من شيت الـ Delivery
-            # -------------------------------------------------------------
             pre_filled_zones = []
             pre_filled_data = {}
             if not df_delivery.empty:
@@ -481,7 +591,6 @@ with tab2:
 
                 my_del_df = pd.DataFrame()
 
-                # المطابقة الصارمة برقم الفيندور الموجود في الشيت
                 if d_vid_col:
                     my_del_df = df_delivery[df_delivery[d_vid_col].apply(normalize_id) == v_id_clean]
                 elif d_cid_col and v_chain_id:
