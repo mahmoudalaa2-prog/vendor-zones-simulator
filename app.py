@@ -65,6 +65,13 @@ def delete_user(email):
 # ==========================================
 # 3. دوال المعالجة والمسافات
 # ==========================================
+def normalize_id(val):
+    if pd.isna(val):
+        return ""
+    s = str(val).strip()
+    s = re.sub(r"\.0+$", "", s)
+    return s
+
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str):
         return None
@@ -79,9 +86,18 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return R * c
 
 def get_col(df, possible_names):
+    if df.empty:
+        return None
     for name in possible_names:
         for col in df.columns:
             if str(name).strip().lower() == str(col).strip().lower():
+                return col
+    # بحث مرن بدون فراغات
+    for name in possible_names:
+        name_clean = re.sub(r'[^a-zA-Z0-9]', '', str(name)).lower()
+        for col in df.columns:
+            col_clean = re.sub(r'[^a-zA-Z0-9]', '', str(col)).lower()
+            if name_clean == col_clean or name_clean in col_clean:
                 return col
     return None
 
@@ -118,7 +134,7 @@ def read_google_sheet_csv(url):
 # ==========================================
 # 4. جلب وتجهيز البيانات
 # ==========================================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def load_data():
     url_areas = "https://docs.google.com/spreadsheets/d/1Y3AlqaHjp4nZup6QwOBgl6CT5z3XHjfzpRSx5Yw5byk/export?format=csv&gid=0"
     url_vendors = "https://docs.google.com/spreadsheets/d/12SSMW20Two2hRpHOuIXXifweJI82bZpJClhUAWSuYHk/export?format=csv&gid=0"
@@ -139,9 +155,9 @@ def load_data():
         vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID"])
         cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID"])
         if vid_col:
-            df_v["Vendor Attributes Vendor Id"] = df_v[vid_col].astype(str)
+            df_v["Vendor Attributes Vendor Id"] = df_v[vid_col].apply(normalize_id)
         if cid_col:
-            df_v["Chain Attributes Chain ID"] = df_v[cid_col].astype(str)
+            df_v["Chain Attributes Chain ID"] = df_v[cid_col].apply(normalize_id)
 
     if not df_a.empty:
         poly_col = get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
@@ -162,8 +178,9 @@ def load_data():
             
             area_name_col = get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name"])
             if area_name_col:
-                gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col]
-                mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"^mcd|^mcdonald", case=False, na=False)
+                gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
+                # استبعاد مضلعات ماكدونالدز بدقة حتى مع وجود مسافات
+                mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
                 gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
                 
             gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
@@ -318,9 +335,8 @@ if is_admin:
                 m.get_root().html.add_child(folium.Element(css_no_box))
                 
                 if show_zones and not gdf_areas.empty:
-                    zone_geojson = gdf_areas[["Delivery Location Area Name", "geometry"]].to_json()
                     folium.GeoJson(
-                        zone_geojson,
+                        gdf_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                         name="Delivery Zones",
                         style_function=lambda feature: {"fillColor": "#0055ff", "color": "#002266", "weight": 1.0, "fillOpacity": 0.15},
                         tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
@@ -355,7 +371,7 @@ with tab2:
         vendor_input_id = st.text_input("Enter Vendor ID:", placeholder="اكتب رقم الفيندور هنا...")
     else:
         allowed_raw = str(current_user["access_ids"]).split(",")
-        allowed_ids = [x.strip() for x in allowed_raw if x.strip()]
+        allowed_ids = [normalize_id(x) for x in allowed_raw if x.strip()]
         
         if not df_vendors.empty and cid_col and current_user["access_type"] == "Chain ID":
             permitted_vendors = df_vendors[df_vendors[cid_col].isin(allowed_ids)]
@@ -379,7 +395,7 @@ with tab2:
             )
 
     if vendor_input_id and not df_vendors.empty and vid_col:
-        v_id_clean = str(vendor_input_id).strip()
+        v_id_clean = normalize_id(vendor_input_id)
         vendor_data = df_vendors[df_vendors[vid_col] == v_id_clean]
         
         if vendor_data.empty:
@@ -387,6 +403,7 @@ with tab2:
         else:
             v_row = vendor_data.iloc[0]
             v_name = v_row[name_col]
+            v_chain_id = normalize_id(v_row.get(cid_col, ""))
             st.success(f"Welcome: **{v_name}** | City: {v_row.get(city_col, '')}")
 
             map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=40, value=10, step=1)
@@ -395,26 +412,45 @@ with tab2:
                 portal_areas = portal_areas.sort_values(by="area_size", ascending=False)
             
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
+            # خريطة لمطابقة أسماء المناطق بدون حساسية للمسافات أو حالة الأحرف
+            zone_lookup = {z.strip().lower(): z for z in all_available_zones}
 
+            # -------------------------------------------------------------
+            # استرجاع البيانات المحفوظة مسبقاً من شيت الـ Delivery
+            # -------------------------------------------------------------
             pre_filled_zones = []
             pre_filled_data = {}
             if not df_delivery.empty:
-                d_vid_col = get_col(df_delivery, ["Vendor ID", "Vendor Id", "VendorID"])
-                d_zone_col = get_col(df_delivery, ["Area Name", "Zone", "Delivery Location Area Name", "Area", "Area Name "])
-                d_time_col = get_col(df_delivery, ["Delivery Time", "Time", "Delivery Time "])
-                d_fee_col = get_col(df_delivery, ["Delivery Fees", "Fee", "Delivery Fee", "Delivery Fees "])
-                
-                if d_vid_col and d_zone_col:
-                    my_del_df = df_delivery[df_delivery[d_vid_col].astype(str) == v_id_clean]
-                    if not my_del_df.empty:
-                        for _, d_row in my_del_df.iterrows():
-                            z_name = d_row[d_zone_col]
-                            if pd.notna(z_name) and z_name in all_available_zones:
-                                pre_filled_zones.append(z_name)
-                                pre_filled_data[z_name] = {
-                                    "time": str(d_row[d_time_col]) if d_time_col and pd.notna(d_row[d_time_col]) else "",
-                                    "fees": float(d_row[d_fee_col]) if d_fee_col and pd.notna(d_row[d_fee_col]) else None
-                                }
+                d_vid_col = get_col(df_delivery, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
+                d_cid_col = get_col(df_delivery, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
+                d_zone_col = get_col(df_delivery, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
+                d_time_col = get_col(df_delivery, ["Delivery Time", "Time", "Duration"])
+                d_fee_col = get_col(df_delivery, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
+
+                my_del_df = pd.DataFrame()
+
+                # 1. البحث أولاً بواسطة Vendor ID
+                if d_vid_col:
+                    norm_vids = df_delivery[d_vid_col].apply(normalize_id)
+                    my_del_df = df_delivery[norm_vids == v_id_clean]
+
+                # 2. إذا لم نجد تطابق، نبحث بـ Chain ID
+                if my_del_df.empty and d_cid_col and v_chain_id:
+                    norm_cids = df_delivery[d_cid_col].apply(normalize_id)
+                    my_del_df = df_delivery[norm_cids == v_chain_id]
+
+                if not my_del_df.empty and d_zone_col:
+                    for _, d_row in my_del_df.iterrows():
+                        raw_z_name = str(d_row[d_zone_col]).strip()
+                        canonical_zone = zone_lookup.get(raw_z_name.lower())
+                        
+                        if canonical_zone:
+                            if canonical_zone not in pre_filled_zones:
+                                pre_filled_zones.append(canonical_zone)
+                            pre_filled_data[canonical_zone] = {
+                                "time": str(d_row[d_time_col]) if d_time_col and pd.notna(d_row[d_time_col]) else "",
+                                "fees": float(d_row[d_fee_col]) if d_fee_col and pd.notna(d_row[d_fee_col]) else None
+                            }
 
             if "vendor_portal_id" not in st.session_state or st.session_state["vendor_portal_id"] != v_id_clean:
                 st.session_state["vendor_portal_id"] = v_id_clean
@@ -432,9 +468,13 @@ with tab2:
             st.session_state["applied_zones"] = valid_applied
             current_applied = valid_applied
 
+            if pre_filled_zones:
+                st.info(f"✨ تم العثور على {len(pre_filled_zones)} منطقة مسجلة مسبقاً لهذا الفيندور في شيت التوصيل وتطبيقها تلقائياً.")
+
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
+            # ---------------- عمود الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
                 st.caption("Click any small sub-zone to automatically copy its name, then paste it in the search box.")
@@ -455,9 +495,8 @@ with tab2:
                 v_map.get_root().html.add_child(folium.Element(css_fix_box))
 
                 if not portal_areas.empty:
-                    v_portal_geojson = portal_areas[["Delivery Location Area Name", "geometry"]].to_json()
                     folium.GeoJson(
-                        v_portal_geojson,
+                        portal_areas[["Delivery Location Area Name", "geometry"]].to_json(),
                         name="Delivery Zones",
                         style_function=vendor_zone_style,
                         highlight_function=lambda feature: {"color": "#e74c3c", "weight": 3.5, "fillOpacity": 0.35},
@@ -532,8 +571,6 @@ with tab2:
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
                 st.subheader("💰 Set Delivery Pricing & Time")
-                if pre_filled_zones:
-                    st.success("💡 تم جلب مناطقك المسجلة مسبقاً من قاعدة البيانات.")
 
                 current_applied_hash = ",".join(sorted(st.session_state["applied_zones"]))
                 if st.session_state.get("pricing_hash") != current_applied_hash:
