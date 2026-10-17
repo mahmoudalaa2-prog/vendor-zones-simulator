@@ -92,7 +92,6 @@ def get_col(df, possible_names):
         for col in df.columns:
             if str(name).strip().lower() == str(col).strip().lower():
                 return col
-    # بحث مرن بدون فراغات
     for name in possible_names:
         name_clean = re.sub(r'[^a-zA-Z0-9]', '', str(name)).lower()
         for col in df.columns:
@@ -132,7 +131,7 @@ def read_google_sheet_csv(url):
         return pd.DataFrame()
 
 # ==========================================
-# 4. جلب وتجهيز البيانات
+# 4. جلب وتجهيز البيانات (100% من شيت Vendor Location)
 # ==========================================
 @st.cache_data(ttl=1800)
 def load_data():
@@ -144,21 +143,54 @@ def load_data():
     df_a = read_google_sheet_csv(url_areas)
     df_d = read_google_sheet_csv(url_delivery)
 
+    # معالجة شيت الفيندورز
     if not df_v.empty:
-        map_loc_col = get_col(df_v, ["Vendor Attributes Vendor Map Location", "Map Location", "Location"])
-        if map_loc_col:
-            coords = df_v[map_loc_col].str.split(",", expand=True)
-            df_v["lat"] = pd.to_numeric(coords[0], errors="coerce")
-            df_v["lng"] = pd.to_numeric(coords[1], errors="coerce")
-            df_v = df_v.dropna(subset=["lat", "lng"])
-        
-        vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID"])
-        cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID"])
-        if vid_col:
-            df_v["Vendor Attributes Vendor Id"] = df_v[vid_col].apply(normalize_id)
-        if cid_col:
-            df_v["Chain Attributes Chain ID"] = df_v[cid_col].apply(normalize_id)
+        vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
+        cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
+        name_col = get_col(df_v, ["Vendor Attributes Vendor Name (English)", "Vendor Name", "Name", "vendor_name"])
+        cname_col = get_col(df_v, ["Chain Attributes Chain Name", "Chain Name", "chain_name"])
+        city_col = get_col(df_v, ["Vendor Attributes Vendor City", "City", "Vendor City"])
 
+        df_v["clean_vid"] = df_v[vid_col].apply(normalize_id) if vid_col else ""
+        df_v["clean_cid"] = df_v[cid_col].apply(normalize_id) if cid_col else ""
+        df_v["clean_name"] = df_v[name_col].astype(str).str.strip() if name_col else ("Vendor " + df_v["clean_vid"])
+        df_v["clean_chain_name"] = df_v[cname_col].astype(str).str.strip() if cname_col else ""
+        df_v["clean_city"] = df_v[city_col].astype(str).str.strip() if city_col else ""
+
+        # استخراج الإحداثيات الحقيقية فقط دون إحداثيات وهمية
+        map_loc_col = get_col(df_v, ["Vendor Attributes Vendor Map Location", "Map Location", "Location", "Coordinates"])
+        lat_col = get_col(df_v, ["Latitude", "lat", "Lat"])
+        lng_col = get_col(df_v, ["Longitude", "lng", "Lng", "Long", "lon"])
+
+        if map_loc_col:
+            coords = df_v[map_loc_col].astype(str).str.split(r'[,;]+', expand=True)
+            df_v["lat"] = pd.to_numeric(coords[0].str.strip(), errors="coerce")
+            df_v["lng"] = pd.to_numeric(coords[1].str.strip(), errors="coerce")
+        elif lat_col and lng_col:
+            df_v["lat"] = pd.to_numeric(df_v[lat_col], errors="coerce")
+            df_v["lng"] = pd.to_numeric(df_v[lng_col], errors="coerce")
+        else:
+            df_v["lat"] = np.nan
+            df_v["lng"] = np.nan
+
+        df_v = df_v[df_v["clean_vid"] != ""].copy()
+
+    # تصفية شيت التوصيل: الإبقاء فقط على الفيندورز الموجودين في Vendor Location
+    if not df_d.empty and not df_v.empty:
+        d_vid_col = get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
+        d_cid_col = get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
+        
+        valid_vids = set(df_v["clean_vid"].unique()) - {""}
+        valid_cids = set(df_v["clean_cid"].unique()) - {""}
+        
+        if d_vid_col:
+            df_d["clean_vid"] = df_d[d_vid_col].apply(normalize_id)
+            df_d = df_d[df_d["clean_vid"].isin(valid_vids)].copy()
+        elif d_cid_col:
+            df_d["clean_cid"] = df_d[d_cid_col].apply(normalize_id)
+            df_d = df_d[df_d["clean_cid"].isin(valid_cids)].copy()
+
+    # معالجة شيت المناطق
     if not df_a.empty:
         poly_col = get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
         if poly_col:
@@ -179,7 +211,6 @@ def load_data():
             area_name_col = get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name"])
             if area_name_col:
                 gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
-                # استبعاد مضلعات ماكدونالدز بدقة حتى مع وجود مسافات
                 mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
                 gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
                 
@@ -199,6 +230,8 @@ df_vendors, gdf_areas, df_delivery = load_data()
 
 @st.cache_data
 def get_nearby_polygons(lat, lng, radius_km):
+    if gdf_areas.empty or pd.isna(lat) or pd.isna(lng):
+        return gpd.GeoDataFrame()
     v_point = Point(lng, lat)
     radius_deg = radius_km / 111.0
     nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
@@ -265,6 +298,12 @@ with st.sidebar:
     if not is_admin:
         st.write(f"📌 **نوع الصلاحية:** `{current_user['access_type']}`")
     st.markdown("---")
+    st.metric("🏬 إجمالي الفيندورز بالشيت", len(df_vendors))
+    st.metric("🗺️ إجمالي المناطق", len(gdf_areas))
+    if st.button("🔄 مزامنة وتحديث الشيتات الآن", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    st.markdown("---")
     if st.button("🚪 تسجيل الخروج (Logout)", use_container_width=True):
         st.session_state.clear()
         st.rerun()
@@ -288,22 +327,18 @@ if is_admin:
             col1, col2 = st.columns([1, 4])
             with col1:
                 st.subheader("Filter Controls")
-                city_col = get_col(df_vendors, ["Vendor Attributes Vendor City", "City", "Vendor City"])
-                all_cities = ["All"] + sorted(df_vendors[city_col].dropna().unique().tolist()) if (city_col and not df_vendors.empty) else ["All"]
+                all_cities = ["All"] + sorted([c for c in df_vendors["clean_city"].unique() if c])
                 selected_city = st.selectbox("1. Select City:", options=all_cities, key="dash_city")
                 st.markdown("---")
                 
-                temp_df = df_vendors if (selected_city == "All" or df_vendors.empty or not city_col) else df_vendors[df_vendors[city_col] == selected_city]
-                name_col = get_col(temp_df, ["Vendor Attributes Vendor Name (English)", "Vendor Name"])
-                vendor_names = ["All"] + sorted(temp_df[name_col].dropna().unique().tolist()) if (name_col and not temp_df.empty) else ["All"]
+                temp_df = df_vendors if selected_city == "All" else df_vendors[df_vendors["clean_city"] == selected_city]
+                vendor_names = ["All"] + sorted([n for n in temp_df["clean_name"].unique() if n])
                 selected_name = st.selectbox("Search by Vendor Name:", options=vendor_names, key="dash_name")
                 
-                vid_col = get_col(temp_df, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID"])
-                vendor_ids = ["All"] + sorted(temp_df[vid_col].dropna().unique().tolist()) if (vid_col and not temp_df.empty) else ["All"]
+                vendor_ids = ["All"] + sorted([v for v in temp_df["clean_vid"].unique() if v])
                 selected_v_id = st.selectbox("Search by Vendor ID:", options=vendor_ids, key="dash_vid")
                 
-                cid_col = get_col(temp_df, ["Chain Attributes Chain ID", "Chain Id", "Chain ID"])
-                chain_ids = ["All"] + sorted(temp_df[cid_col].dropna().unique().tolist()) if (cid_col and not temp_df.empty) else ["All"]
+                chain_ids = ["All"] + sorted([c for c in temp_df["clean_cid"].unique() if c])
                 selected_chain = st.selectbox("Search by Chain ID:", options=chain_ids, key="dash_chain")
                 
                 show_zones = st.checkbox("Show Area Polygons", value=True, key="dash_zones")
@@ -312,19 +347,17 @@ if is_admin:
                     st.rerun()
                     
             with col2:
-                filtered_v = df_vendors.copy() if not df_vendors.empty else pd.DataFrame()
-                if not filtered_v.empty:
-                    if selected_city != "All" and city_col:
-                        filtered_v = filtered_v[filtered_v[city_col] == selected_city]
-                    if selected_name != "All" and name_col:
-                        filtered_v = filtered_v[filtered_v[name_col] == selected_name]
-                    if selected_v_id != "All" and vid_col:
-                        filtered_v = filtered_v[filtered_v[vid_col] == selected_v_id]
-                    if selected_chain != "All" and cid_col:
-                        filtered_v = filtered_v[filtered_v[cid_col] == selected_chain]
+                filtered_v = df_vendors.copy()
+                if selected_city != "All": filtered_v = filtered_v[filtered_v["clean_city"] == selected_city]
+                if selected_name != "All": filtered_v = filtered_v[filtered_v["clean_name"] == selected_name]
+                if selected_v_id != "All": filtered_v = filtered_v[filtered_v["clean_vid"] == selected_v_id]
+                if selected_chain != "All": filtered_v = filtered_v[filtered_v["clean_cid"] == selected_chain]
+                
+                # رسم الفيندورز التي تملك إحداثيات حقيقية فقط
+                plot_v = filtered_v.dropna(subset=["lat", "lng"])
                     
-                if not filtered_v.empty and "lat" in filtered_v.columns and "lng" in filtered_v.columns:
-                    center = [filtered_v["lat"].mean(), filtered_v["lng"].mean()]
+                if not plot_v.empty:
+                    center = [plot_v["lat"].mean(), plot_v["lng"].mean()]
                     zoom = 14 if (selected_name != "All" or selected_v_id != "All") else 12 if selected_chain != "All" else 11 if selected_city != "All" else 6
                 else:
                     center = [30.0444, 31.2357]
@@ -342,77 +375,96 @@ if is_admin:
                         tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["Area Name: "])
                     ).add_to(m)
                     
-                if not filtered_v.empty and "lat" in filtered_v.columns:
+                if not plot_v.empty:
                     cluster = MarkerCluster().add_to(m)
                     is_searched = (selected_name != "All" or selected_v_id != "All" or selected_chain != "All")
-                    for _, row in filtered_v.iterrows():
-                        popup_html = f"<b>{row.get(name_col, '')}</b><br><b>Vendor ID:</b> {row.get(vid_col, '')}"
+                    for _, row in plot_v.iterrows():
+                        popup_html = f"<b>{row.get('clean_name', '')}</b><br><b>Vendor ID:</b> {row.get('clean_vid', '')}<br><b>Chain ID:</b> {row.get('clean_cid', '')}"
                         folium.Marker(
                             location=[row['lat'], row['lng']],
                             popup=folium.Popup(popup_html, max_width=300),
-                            tooltip=row.get(name_col, ""),
+                            tooltip=row.get("clean_name", ""),
                             icon=folium.Icon(color="green" if is_searched else "red", icon="star" if is_searched else "shopping-cart", prefix="fa")
                         ).add_to(cluster)
                         
                 st_folium(m, width="100%", height=650, key="main_map_admin", returned_objects=[])
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (100% مطابق لشيت Vendor Location)
 # ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
     
-    vid_col = get_col(df_vendors, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID"])
-    name_col = get_col(df_vendors, ["Vendor Attributes Vendor Name (English)", "Vendor Name"])
-    cid_col = get_col(df_vendors, ["Chain Attributes Chain ID", "Chain Id", "Chain ID"])
-    city_col = get_col(df_vendors, ["Vendor Attributes Vendor City", "City", "Vendor City"])
+    target_vid = ""
 
     if is_admin:
-        vendor_input_id = st.text_input("Enter Vendor ID:", placeholder="اكتب رقم الفيندور هنا...")
+        vendor_input_raw = st.text_input(
+            "Enter Vendor ID:",
+            placeholder="اكتب رقم الفيندور المسجل في شيت Vendor Location...",
+            key="admin_vendor_input_field"
+        ).strip()
+
+        if vendor_input_raw:
+            clean_search = normalize_id(vendor_input_raw)
+            match_vid = df_vendors[df_vendors["clean_vid"] == clean_search]
+            
+            if not match_vid.empty:
+                target_vid = clean_search
+            else:
+                st.error(f"❌ هذا الرقم `{vendor_input_raw}` غير موجود في شيت Vendor Location نهائياً.")
     else:
         allowed_raw = str(current_user["access_ids"]).split(",")
         allowed_ids = [normalize_id(x) for x in allowed_raw if x.strip()]
         
-        if not df_vendors.empty and cid_col and current_user["access_type"] == "Chain ID":
-            permitted_vendors = df_vendors[df_vendors[cid_col].isin(allowed_ids)]
-        elif not df_vendors.empty and vid_col:
-            permitted_vendors = df_vendors[df_vendors[vid_col].isin(allowed_ids)]
+        if current_user["access_type"] == "Chain ID":
+            permitted_vendors = df_vendors[df_vendors["clean_cid"].isin(allowed_ids)]
         else:
-            permitted_vendors = pd.DataFrame()
+            permitted_vendors = df_vendors[df_vendors["clean_vid"].isin(allowed_ids)]
             
         if permitted_vendors.empty:
             st.warning("⚠️ لا توجد فروع أو فيندورز مربوطة بحسابك حتى الآن. يرجى التواصل مع الإدارة.")
-            vendor_input_id = ""
         else:
             options_dict = dict(zip(
-                permitted_vendors[vid_col],
-                permitted_vendors[name_col] + " (" + permitted_vendors[vid_col] + ")"
+                permitted_vendors["clean_vid"],
+                permitted_vendors["clean_name"] + " (" + permitted_vendors["clean_vid"] + ")"
             ))
-            vendor_input_id = st.selectbox(
+            target_vid = st.selectbox(
                 "اختر الفرع / الفيندور الذي تريد تعديل مناطقه:",
                 options=list(options_dict.keys()),
                 format_func=lambda x: options_dict[x]
             )
 
-    if vendor_input_id and not df_vendors.empty and vid_col:
-        v_id_clean = normalize_id(vendor_input_id)
-        vendor_data = df_vendors[df_vendors[vid_col] == v_id_clean]
+    if target_vid:
+        v_id_clean = normalize_id(target_vid)
+        vendor_data = df_vendors[df_vendors["clean_vid"] == v_id_clean]
         
         if vendor_data.empty:
             st.error("Invalid Vendor ID.")
         else:
             v_row = vendor_data.iloc[0]
-            v_name = v_row[name_col]
-            v_chain_id = normalize_id(v_row.get(cid_col, ""))
-            st.success(f"Welcome: **{v_name}** | City: {v_row.get(city_col, '')}")
+            v_name = v_row["clean_name"]
+            v_chain_id = v_row["clean_cid"]
+            v_city = v_row["clean_city"]
+            
+            # التحقق الصارم من وجود إحداثيات حقيقية في الشيت
+            has_real_coords = pd.notna(v_row["lat"]) and pd.notna(v_row["lng"])
+            
+            st.success(f"Welcome: **{v_name}** | City: {v_city} | Vendor ID: `{v_id_clean}` | Chain ID: `{v_chain_id}`")
+
+            if not has_real_coords:
+                st.warning("⚠️ هذا الفرع مسجل في شيت Vendor Location ولكن ليس لديه إحداثيات موقع (Latitude/Longitude) مسجلة في الشيت. يرجى إضافة إحداثياته في الشيت لحساب المسافات بدقة 100%.")
 
             map_radius_km = st.slider("Map View Radius (km):", min_value=3, max_value=40, value=10, step=1)
-            portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km) if not gdf_areas.empty else gpd.GeoDataFrame()
+            
+            if has_real_coords:
+                portal_areas = get_nearby_polygons(v_row["lat"], v_row["lng"], map_radius_km)
+            else:
+                portal_areas = gdf_areas.head(30).copy() if not gdf_areas.empty else gpd.GeoDataFrame()
+                
             if not portal_areas.empty:
                 portal_areas = portal_areas.sort_values(by="area_size", ascending=False)
             
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
-            # خريطة لمطابقة أسماء المناطق بدون حساسية للمسافات أو حالة الأحرف
             zone_lookup = {z.strip().lower(): z for z in all_available_zones}
 
             # -------------------------------------------------------------
@@ -429,15 +481,11 @@ with tab2:
 
                 my_del_df = pd.DataFrame()
 
-                # 1. البحث أولاً بواسطة Vendor ID
+                # المطابقة الصارمة برقم الفيندور الموجود في الشيت
                 if d_vid_col:
-                    norm_vids = df_delivery[d_vid_col].apply(normalize_id)
-                    my_del_df = df_delivery[norm_vids == v_id_clean]
-
-                # 2. إذا لم نجد تطابق، نبحث بـ Chain ID
-                if my_del_df.empty and d_cid_col and v_chain_id:
-                    norm_cids = df_delivery[d_cid_col].apply(normalize_id)
-                    my_del_df = df_delivery[norm_cids == v_chain_id]
+                    my_del_df = df_delivery[df_delivery[d_vid_col].apply(normalize_id) == v_id_clean]
+                elif d_cid_col and v_chain_id:
+                    my_del_df = df_delivery[df_delivery[d_cid_col].apply(normalize_id) == v_chain_id]
 
                 if not my_del_df.empty and d_zone_col:
                     for _, d_row in my_del_df.iterrows():
@@ -469,7 +517,7 @@ with tab2:
             current_applied = valid_applied
 
             if pre_filled_zones:
-                st.info(f"✨ تم العثور على {len(pre_filled_zones)} منطقة مسجلة مسبقاً لهذا الفيندور في شيت التوصيل وتطبيقها تلقائياً.")
+                st.info(f"✨ تم استرجاع ({len(pre_filled_zones)}) منطقة مسجلة مسبقاً لهذا الفرع من شيت التوصيل.")
 
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
@@ -479,8 +527,11 @@ with tab2:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
                 st.caption("Click any small sub-zone to automatically copy its name, then paste it in the search box.")
 
-                v_map = folium.Map(location=[v_row["lat"], v_row["lng"]], zoom_start=13)
-                folium.Marker(location=[v_row["lat"], v_row["lng"]], popup=f"<b>{v_name}</b>", icon=folium.Icon(color="green", icon="star")).add_to(v_map)
+                map_center = [v_row["lat"], v_row["lng"]] if has_real_coords else [30.0444, 31.2357]
+                v_map = folium.Map(location=map_center, zoom_start=13 if has_real_coords else 11)
+                
+                if has_real_coords:
+                    folium.Marker(location=[v_row["lat"], v_row["lng"]], popup=f"<b>{v_name}</b>", icon=folium.Icon(color="green", icon="star")).add_to(v_map)
 
                 applied_set = set(current_applied)
 
@@ -579,7 +630,7 @@ with tab2:
                     
                     for zone in st.session_state["applied_zones"]:
                         zone_row = gdf_areas[gdf_areas["Delivery Location Area Name"] == zone] if not gdf_areas.empty else pd.DataFrame()
-                        if not zone_row.empty:
+                        if not zone_row.empty and has_real_coords:
                             dist = haversine_km(v_row["lat"], v_row["lng"], zone_row.iloc[0]["centroid_lat"], zone_row.iloc[0]["centroid_lng"])
                         else:
                             dist = 0.0
@@ -589,7 +640,7 @@ with tab2:
                             
                         pricing_data.append({
                             "Zone": zone,
-                            "Distance (km)": round(dist, 1),
+                            "Distance (km)": round(dist, 1) if has_real_coords else 0.0,
                             "Delivery Time": def_time,
                             "Delivery Fees": def_fee
                         })
@@ -691,9 +742,10 @@ if is_admin:
                     access_choice = st.radio("طريقة ربط الصلاحية:", ["Chain ID", "Vendor ID"])
                     if access_choice == "Chain ID":
                         access_type = "Chain ID"
-                        if not df_vendors.empty and "Chain Attributes Chain ID" in df_vendors.columns:
-                            chains_df = df_vendors[["Chain Attributes Chain ID", "Chain Attributes Chain Name"]].drop_duplicates()
-                            chain_opts = dict(zip(chains_df["Chain Attributes Chain ID"], chains_df["Chain Attributes Chain Name"] + " (" + chains_df["Chain Attributes Chain ID"] + ")"))
+                        if not df_vendors.empty and "clean_cid" in df_vendors.columns:
+                            chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
+                            chains_df = chains_df[chains_df["clean_cid"] != ""]
+                            chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
                             chosen_chains = st.multiselect("اختر السلاسل:", options=list(chain_opts.keys()), format_func=lambda x: chain_opts[x])
                             selected_access_ids_str = ", ".join(chosen_chains)
                         else:
@@ -701,9 +753,10 @@ if is_admin:
                             selected_access_ids_str = ""
                     else:
                         access_type = "Vendor ID"
-                        if not df_vendors.empty and "Vendor Attributes Vendor Id" in df_vendors.columns:
-                            vendors_df = df_vendors[["Vendor Attributes Vendor Id", "Vendor Attributes Vendor Name (English)"]].drop_duplicates()
-                            vendor_opts = dict(zip(vendors_df["Vendor Attributes Vendor Id"], vendors_df["Vendor Attributes Vendor Name (English)"] + " (" + vendors_df["Vendor Attributes Vendor Id"] + ")"))
+                        if not df_vendors.empty and "clean_vid" in df_vendors.columns:
+                            vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
+                            vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
+                            vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
                             chosen_vendors = st.multiselect("اختر الفروع:", options=list(vendor_opts.keys()), format_func=lambda x: vendor_opts[x])
                             selected_access_ids_str = ", ".join(chosen_vendors)
                         else:
