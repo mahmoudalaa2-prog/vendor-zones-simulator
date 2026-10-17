@@ -18,6 +18,20 @@ from datetime import datetime
 # ==========================================
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management", page_icon="🔒")
 
+# لوحة ألوان مخصصة لتمييز فروع السلسلة الواحدة
+BRANCH_PALETTE = [
+    {"hex": "#28a745", "folium": "green", "name": "أخضر"},
+    {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
+    {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
+    {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
+    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
+    {"hex": "#d63384", "folium": "pink", "name": "وردي"},
+    {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
+    {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
+    {"hex": "#8540f5", "folium": "darkpurple", "name": "أرجواني"},
+    {"hex": "#a52a2a", "folium": "darkred", "name": "بني"}
+]
+
 # ==========================================
 # 2. إدارة المستخدمين وقاعدة البيانات الأمنية
 # ==========================================
@@ -364,20 +378,18 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (خفيفة، تدعم التعطيل/التشغيل، وتبرز مناطق التوصيل بالأخضر تلقائياً)
+# Tab 1: Admin Map (عرض كل المناطق بالأزرق + ألوان متعددة لفروع السلسلة)
 # ==========================================
 if is_admin:
     with tab1:
         st.header("🗺️ Admin Overview & Simulation Map")
         
-        # مفتاح تشغيل/إيقاف الخريطة الكبيرة لحفظ أقصى سرعة
+        # مفتاح تشغيل/إيقاف الخريطة الكبيرة للحفاظ على سرعة السيستم
         map_active = st.toggle("⚡ Activate Admin Map (تشغيل خريطة الأدمن الكبيرة)", value=False, key="toggle_admin_map")
         
         if not map_active:
             st.info("⏸️ **خريطة المراقبة الكبيرة معطلة لتسريع الموقع بنسبة 100% وتحقيق أقصى سرعة لصفحة الفيندورز.**\n\nفَعِّل المفتاح بالأعلى في أي وقت عندما تحتاج لمراجعة الخريطة ومناطق التوصيل.")
         else:
-            st.caption("🔍 عند اختيار Chain أو Vendor، سيتم تلقائياً تظليل جميع مناطق توصيلها باللون الأخضر على الخريطة.")
-            
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.5, 1.8, 0.8])
             
             with f_col1:
@@ -430,38 +442,101 @@ if is_admin:
             plot_vendors = display_vendors.dropna(subset=["lat", "lng"]).copy()
 
             # -------------------------------------------------------------
-            # استخراج مناطق التوصيل المستهدفة لتلوينها بالأخضر تلقائياً
+            # تخصيص لون فريد لكل فرع لتمييز مناطق التوصيل
             # -------------------------------------------------------------
-            target_delivery_zones = []
-            info_label = ""
-            
-            if not df_delivery.empty and not gdf_areas.empty:
-                # 1. إذا اختار فيندور محدد
-                if selected_vendor != "All Vendors (كل الفروع)":
-                    v_match_row = display_vendors.iloc[0]
-                    m_del = df_delivery[df_delivery["clean_vid"] == selected_vendor]
-                    if m_del.empty and v_match_row["clean_cid"]:
-                        m_del = df_delivery[df_delivery["clean_cid"] == v_match_row["clean_cid"]]
-                    if not m_del.empty and "clean_zone" in m_del.columns:
-                        target_delivery_zones = m_del["clean_zone"].dropna().unique().tolist()
-                        info_label = f"مناطق توصيل الفرع **{v_match_row['clean_name']}** (ID: {selected_vendor})"
-                        
-                # 2. إذا اختار سلسلة كاملة
-                elif selected_chain != "All Chains (كل السلاسل)":
-                    chain_vids = display_vendors["clean_vid"].unique().tolist()
-                    m_del = df_delivery[(df_delivery["clean_cid"] == selected_chain) | (df_delivery["clean_vid"].isin(chain_vids))]
-                    if not m_del.empty and "clean_zone" in m_del.columns:
-                        target_delivery_zones = m_del["clean_zone"].dropna().unique().tolist()
-                        c_name = chain_map.get(selected_chain, selected_chain)
-                        info_label = f"مناطق توصيل سلسلة **{c_name}**"
+            vendor_color_map = {}
+            if selected_chain != "All Chains (كل السلاسل)":
+                chain_branches = chain_filtered_vendors[["clean_vid", "clean_name"]].drop_duplicates()
+                for idx, (_, b_row) in enumerate(chain_branches.iterrows()):
+                    pal_entry = BRANCH_PALETTE[idx % len(BRANCH_PALETTE)]
+                    vendor_color_map[b_row["clean_vid"]] = {
+                        "name": b_row["clean_name"],
+                        "hex": pal_entry["hex"],
+                        "folium": pal_entry["folium"],
+                        "color_name": pal_entry["name"]
+                    }
+            elif selected_vendor != "All Vendors (كل الفروع)":
+                v_name_sel = display_vendors.iloc[0]["clean_name"]
+                vendor_color_map[selected_vendor] = {
+                    "name": v_name_sel,
+                    "hex": "#28a745",
+                    "folium": "green",
+                    "color_name": "أخضر"
+                }
 
-            # عرض رسالة تأكيد للمناطق المظللة
-            if target_delivery_zones:
-                st.success(f"🟢 **تم تظليل {info_label} باللون الأخضر ({len(target_delivery_zones)} منطقة).**")
-            elif (selected_chain != "All Chains (كل السلاسل)" or selected_vendor != "All Vendors (كل الفروع)"):
-                st.warning("⚠️ لم يتم العثور على مناطق توصيل مسجلة في شيت التوصيل لهذا الاختيار.")
-            else:
-                st.info("💡 اختر **سلسلة (Chain)** أو **فرع (Vendor)** بالأعلى لتظليل مناطق التوصيل الخاصة به بالأخضر تلقائياً على الخريطة.")
+            # بناء قاموس مناطق التوصيل لمعرفة أي فرع يوصل لأي منطقة
+            zone_to_vendor_info = {}
+            if not df_delivery.empty and vendor_color_map:
+                relevant_vids = set(vendor_color_map.keys())
+                
+                # تصفية شيت التوصيل للفروع أو السلسلة
+                if selected_vendor != "All Vendors (كل الفروع)":
+                    rel_del = df_delivery[df_delivery["clean_vid"] == selected_vendor]
+                    if rel_del.empty and display_vendors.iloc[0]["clean_cid"]:
+                        rel_del = df_delivery[df_delivery["clean_cid"] == display_vendors.iloc[0]["clean_cid"]]
+                else:
+                    rel_del = df_delivery[(df_delivery["clean_cid"] == selected_chain) | (df_delivery["clean_vid"].isin(relevant_vids))]
+
+                for _, r in rel_del.iterrows():
+                    z_norm = str(r.get("clean_zone", "")).strip().lower()
+                    if not z_norm:
+                        continue
+                    vid = str(r.get("clean_vid", ""))
+                    v_info = vendor_color_map.get(vid)
+                    
+                    # إذا كانت المنطقة مسجلة برقم السلسلة العام وليس برقم الفرع
+                    if not v_info and selected_chain != "All Chains (كل السلاسل)":
+                        v_info = {"name": f"سلسلة {chain_map.get(selected_chain, '')}", "hex": "#28a745", "folium": "green"}
+                    
+                    if v_info:
+                        if z_norm not in zone_to_vendor_info:
+                            zone_to_vendor_info[z_norm] = []
+                        zone_to_vendor_info[z_norm].append({
+                            "vid": vid,
+                            "name": v_info["name"],
+                            "hex": v_info["hex"],
+                            "time": r.get("clean_time", "-"),
+                            "fee": r.get("clean_fee", "-")
+                        })
+
+            # عرض دليل الألوان للفروع (Legend) إذا تم اختيار سلسلة
+            if selected_chain != "All Chains (كل السلاسل)" and vendor_color_map:
+                st.write("🎨 **دليل ألوان الفروع ومناطق توصيلها:**")
+                n_cols = min(max(len(vendor_color_map), 1), 4)
+                leg_cols = st.columns(n_cols)
+                for idx, (b_vid, b_info) in enumerate(vendor_color_map.items()):
+                    with leg_cols[idx % n_cols]:
+                        st.markdown(
+                            f"<div style='padding:6px 10px; border-radius:5px; margin-bottom:6px; border-left: 6px solid {b_info['hex']}; background: #f8f9fa; font-size:12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
+                            f"<b>{b_info['name']}</b><br><span style='color:gray;'>Vendor ID: {b_vid}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+            # -------------------------------------------------------------
+            # تجهيز مضلعات الخريطة: كل المناطق بالأزرق + مناطق الفروع بألوانها
+            # -------------------------------------------------------------
+            if not gdf_areas.empty:
+                gdf_areas_plot = gdf_areas[["Delivery Location Area Name", "geometry"]].copy()
+
+                def assign_zone_styling(area_name):
+                    z_clean = str(area_name).strip().lower()
+                    if z_clean in zone_to_vendor_info:
+                        info_list = zone_to_vendor_info[z_clean]
+                        primary_info = info_list[0]
+                        # دمج أسماء الفروع التي تغطي هذه المنطقة إن وجد أكثر من فرع
+                        branch_labels = [f"{x['name']} ({x['vid']})" if x['vid'] else x['name'] for x in info_list]
+                        desc = " | ".join(branch_labels)
+                        return primary_info["hex"], primary_info["hex"], 0.55, 2.2, desc, True
+                    # المناطق العامة غير المغطاة بالفرع المختار: تعود للأزرق الكلاسيكي كما كانت
+                    return "#3388ff", "#002266", 0.12, 1.0, "منطقة عامة (غير مسجلة للفرع)", False
+
+                props = gdf_areas_plot["Delivery Location Area Name"].apply(assign_zone_styling)
+                gdf_areas_plot["fill_color"] = [p[0] for p in props]
+                gdf_areas_plot["border_color"] = [p[1] for p in props]
+                gdf_areas_plot["fill_opacity"] = [p[2] for p in props]
+                gdf_areas_plot["weight"] = [p[3] for p in props]
+                gdf_areas_plot["coverage_info"] = [p[4] for p in props]
 
             # حساب مركز الخريطة ومستوى الزووم
             if selected_vendor != "All Vendors (كل الفروع)" and not plot_vendors.empty:
@@ -479,52 +554,64 @@ if is_admin:
             m_admin.get_root().html.add_child(folium.Element(css_style))
 
             # -------------------------------------------------------------
-            # رسم مضلعات التوصيل المستهدفة بالأخضر (فائقة السرعة)
+            # رسم مضلعات جميع المناطق (بالأزرق للمناطق العامة وبألوان الفروع للمغطاة)
             # -------------------------------------------------------------
-            if target_delivery_zones and not gdf_areas.empty:
-                zone_lookup = {z.strip().lower(): z for z in gdf_areas["Delivery Location Area Name"]}
-                canonical_targets = [zone_lookup[t.strip().lower()] for t in target_delivery_zones if t.strip().lower() in zone_lookup]
-                matched_polygons = gdf_areas[gdf_areas["Delivery Location Area Name"].isin(canonical_targets)]
-                
-                if not matched_polygons.empty:
-                    folium.GeoJson(
-                        matched_polygons[["Delivery Location Area Name", "geometry"]].to_json(),
-                        name="Delivery Zones",
-                        style_function=lambda feature: {
-                            "fillColor": "#28a745",
-                            "color": "#155724",
-                            "weight": 2.2,
-                            "fillOpacity": 0.50
-                        },
-                        highlight_function=lambda feature: {"color": "#ffc107", "weight": 3.5, "fillOpacity": 0.70},
-                        tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["منطقة توصيل: "]),
-                        popup=folium.GeoJsonPopup(fields=["Delivery Location Area Name"], aliases=["Zone: "])
-                    ).add_to(m_admin)
+            if not gdf_areas.empty:
+                folium.GeoJson(
+                    gdf_areas_plot[["Delivery Location Area Name", "coverage_info", "fill_color", "border_color", "fill_opacity", "weight", "geometry"]].to_json(),
+                    name="Delivery Zones",
+                    style_function=lambda feature: {
+                        "fillColor": feature["properties"].get("fill_color", "#3388ff"),
+                        "color": feature["properties"].get("border_color", "#002266"),
+                        "weight": feature["properties"].get("weight", 1.0),
+                        "fillOpacity": feature["properties"].get("fill_opacity", 0.12)
+                    },
+                    highlight_function=lambda feature: {
+                        "color": "#ffc107",
+                        "weight": 3.2,
+                        "fillOpacity": 0.65
+                    },
+                    tooltip=folium.GeoJsonTooltip(
+                        fields=["Delivery Location Area Name", "coverage_info"],
+                        aliases=["المنطقة: ", "تغطية الفرع: "]
+                    ),
+                    popup=folium.GeoJsonPopup(
+                        fields=["Delivery Location Area Name", "coverage_info"],
+                        aliases=["اسم المنطقة: ", "الفروع التي تغطيها: "]
+                    )
+                ).add_to(m_admin)
 
             # -------------------------------------------------------------
-            # رسم دبابيس الفيندورز عبر MarkerCluster
+            # رسم دبابيس الفيندورز عبر MarkerCluster متطابقة مع ألوان مناطقها
             # -------------------------------------------------------------
             if not plot_vendors.empty:
                 cluster = MarkerCluster().add_to(m_admin)
                 
                 for _, row in plot_vendors.iterrows():
-                    is_single_focus = (selected_vendor != "All Vendors (كل الفروع)" and row["clean_vid"] == selected_vendor)
                     popup_content = build_vendor_popup_html(row, df_delivery)
+                    vid_str = row["clean_vid"]
+                    b_color_info = vendor_color_map.get(vid_str)
+                    
+                    if b_color_info:
+                        pin_color = b_color_info.get("folium", "green")
+                    else:
+                        pin_color = "blue"
+                        
+                    is_single_focus = (selected_vendor != "All Vendors (كل الفروع)" and vid_str == selected_vendor)
                     
                     if is_single_focus:
                         folium.Marker(
                             location=[row['lat'], row['lng']],
                             popup=folium.Popup(popup_content, max_width=320),
-                            tooltip=f"⭐ {row['clean_name']} (اضغط لعرض مناطق التوصيل)",
+                            tooltip=f"⭐ {row['clean_name']} (ID: {vid_str})",
                             icon=folium.Icon(color="green", icon="star", prefix="fa")
                         ).add_to(m_admin)
                     else:
-                        is_chain_hl = (selected_chain != "All Chains (كل السلاسل)")
                         folium.Marker(
                             location=[row['lat'], row['lng']],
                             popup=folium.Popup(popup_content, max_width=320),
-                            tooltip=f"{row['clean_name']} ({row['clean_vid']})",
-                            icon=folium.Icon(color="green" if is_chain_hl else "blue", icon="cutlery", prefix="fa")
+                            tooltip=f"🏬 {row['clean_name']} ({vid_str})",
+                            icon=folium.Icon(color=pin_color, icon="cutlery", prefix="fa")
                         ).add_to(cluster)
 
             st_folium(m_admin, width="100%", height=620, key=f"admin_overview_map_{selected_city}_{selected_chain}_{selected_vendor}", returned_objects=[])
