@@ -18,7 +18,6 @@ from datetime import datetime
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
-# تقليص وتنسيق حجم أرقام الـ Metrics وضبط النوافذ المنبثقة
 st.markdown("""
 <style>
 div[data-testid="stMetricValue"] {
@@ -444,14 +443,6 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                     c_perf = c_match.iloc[0].to_dict()
     return v_perf, c_perf
 
-@st.cache_data
-def get_nearby_polygons(lat, lng, radius_km):
-    if gdf_areas.empty or pd.isna(lat) or pd.isna(lng): return gpd.GeoDataFrame()
-    v_point = Point(lng, lat)
-    radius_deg = radius_km / 111.0
-    nearby_mask = gdf_areas.geometry.intersects(v_point.buffer(radius_deg))
-    return gdf_areas[nearby_mask].copy()
-
 def init_requests_db():
     if not os.path.exists(REQUESTS_FILE):
         pd.DataFrame(columns=[
@@ -656,7 +647,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (فلاتر Multiselect ثابتة ومستقرة + شبكة المناطق الكاملة)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -670,7 +661,6 @@ if is_admin:
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
-            # الفلاتر الأربعة بنظام القوائم متعددة الاختيار الطبيعية المستقرة
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.4, 1.4, 1.2])
             
             with f_col1:
@@ -793,7 +783,6 @@ if is_admin:
             else:
                 plot_vendors = pd.DataFrame()
 
-            # حساب مؤشرات الأداء الحية المربوطة بشيت Vendors Performance
             cnt_total, cnt_active, cnt_inactive, tot_orders, tot_failed, rate_str = get_performance_kpis(df_disp, df_performance)
 
             card_col1, card_col2, card_col3, card_col4 = st.columns(4)
@@ -821,9 +810,7 @@ if is_admin:
                 delta_color="inverse"
             )
 
-            # تجهيز خريطة التغطية والمناطق وتوصيل الفروع
             try:
-                # تعيين ألوان الفروع بأمان كامل
                 vendor_color_map = {}
                 distinct_branches = df_disp[["clean_vid", "clean_name", "clean_chain_name"]].drop_duplicates()
                 for idx, (_, b_row) in enumerate(distinct_branches.iterrows()):
@@ -836,7 +823,6 @@ if is_admin:
                         "color_name": pal_entry.get("name", "أخضر")
                     }
 
-                # ربط مناطق التوصيل بالفروع
                 disp_vids = set(df_disp["clean_vid"].dropna().unique())
                 rel_del = df_delivery[df_delivery["clean_vid"].isin(disp_vids)] if not df_delivery.empty else pd.DataFrame()
 
@@ -857,7 +843,6 @@ if is_admin:
                             "fee": r.get("clean_fee", "-")
                         })
 
-                # عرض دليل الألوان إذا تم تحديد سلاسل أو فروع محددة
                 if (selected_chains or selected_vendors or (len(vendor_color_map) <= 15 and len(vendor_color_map) > 1)):
                     st.write(T("🎨 **دليل تمييز ألوان الفروع ومناطق توصيلها:**", "🎨 **Branch Color Legend & Delivery Areas:**"))
                     n_cols = min(max(len(vendor_color_map), 1), 4)
@@ -871,7 +856,6 @@ if is_admin:
                                 unsafe_allow_html=True
                             )
 
-                # استخراج وتجهيز شبكة المضلعات الجغرافية
                 gdf_areas_to_render = gpd.GeoDataFrame()
                 if not gdf_areas.empty:
                     covered_names = set(zone_to_vendor_info.keys())
@@ -891,7 +875,6 @@ if is_admin:
                     else:
                         gdf_areas_to_render = covered_gdf if not covered_gdf.empty else gdf_areas.head(80).copy()
 
-                # تجهيز تصميم النافذة المنبثقة المدمجة ذات الخط الصغير والتمرير للأسفل
                 if not gdf_areas_to_render.empty:
                     def assign_zone_styling_and_popup(area_name):
                         z_clean = str(area_name).strip().lower()
@@ -912,7 +895,6 @@ if is_admin:
                     gdf_areas_to_render["weight"] = [p[3] for p in props]
                     gdf_areas_to_render["popup_html"] = [p[4] for p in props]
 
-                # حساب مركز الخريطة ومستوى التكبير
                 if selected_vendors and not plot_vendors.empty:
                     map_center = [float(plot_vendors.iloc[0]["lat"]), float(plot_vendors.iloc[0]["lng"])]
                     zoom_lvl = 13
@@ -927,7 +909,6 @@ if is_admin:
 
                 m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
                 
-                # إضافة ستايل الخريطة بشكل آمن ومغلق
                 map_custom_css = (
                     "<style>"
                     ".leaflet-interactive:focus {outline: none !important;}"
@@ -936,7 +917,6 @@ if is_admin:
                 )
                 m_admin.get_root().html.add_child(folium.Element(map_custom_css))
 
-                # رسم مضلعات المناطق كاملة
                 if not gdf_areas_to_render.empty:
                     folium.GeoJson(
                         gdf_areas_to_render[["Delivery Location Area Name", "popup_html", "fill_color", "border_color", "fill_opacity", "weight", "geometry"]].to_json(),
@@ -963,7 +943,6 @@ if is_admin:
                         )
                     ).add_to(m_admin)
 
-                # إضافة دبابيس الفروع
                 if not plot_vendors.empty:
                     cluster = MarkerCluster().add_to(m_admin)
                     for _, row in plot_vendors.iterrows():
@@ -993,7 +972,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع خيار تحديد كامل فروع السلسلة دفعة واحدة)
+# Tab 2: Vendor Portal (بوابة الفيندور - التغطية الذكية والخيارات الثلاثة والتعديل الحصري)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1038,278 +1017,478 @@ with tab2:
         if select_entire_chain:
             is_multi = True
             vd = chain_siblings
-            t_vid = "MULTI_" + str(found_cid)
-            st.success(T(f"✨ تم تفعيل وضع التوزيع المجمع لكافة فروع السلسلة ({len(vd)} فرع)!", f"✨ Multi-branch allocation active for ({len(vd)}) branches!"))
+            portal_session_key = "MULTI_" + str(found_cid)
+            st.success(T(f"✨ تم تفعيل وضع السلسلة بالكامل ({len(vd)} فرع) مع التمييز اللوني لكل فرع!", f"✨ Multi-branch chain mode active for ({len(vd)}) branches!"))
         else:
             is_multi = False
             opt = dict(zip(p_vends["clean_vid"], p_vends["clean_name"] + " (" + p_vends["clean_vid"] + ")"))
-            t_vid = st.selectbox(
+            single_chosen_vid = st.selectbox(
                 T("اختر الفرع:", "Select Branch:"),
                 list(opt.keys()),
                 format_func=lambda x: opt[x],
                 key="single_vendor_select"
             )
-            vd = p_vends[p_vends["clean_vid"] == t_vid]
+            vd = p_vends[p_vends["clean_vid"] == single_chosen_vid]
+            portal_session_key = "SINGLE_" + str(single_chosen_vid)
 
         if not vd.empty:
-            has_real_coords = False
-            has_loc = False
-            if is_multi:
-                v_nm = T("مجموعة فروع السلسلة", "Multiple Branches")
-                v_cid = vd.iloc[0]["clean_cid"]
-                v_cnm = vd.iloc[0].get("clean_chain_name", "")
-                v_city = vd.iloc[0].get("clean_city", "")
-                has_real_coords = pd.notna(vd["lat"]).any() and pd.notna(vd["lng"]).any()
-                has_loc = has_real_coords
-                
-                _, cp = get_vendor_and_chain_perf("", v_cid, df_performance)
-                if cp:
-                    st.subheader(T("📊 مؤشرات أداء السلسلة بالكامل (Chain Performance)", "📊 Chain Performance Metrics"))
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric(T("إجمالي طلبات السلسلة", "Chain Net Orders"), cp.get("qc_orders", "-"))
-                    c2.metric(T("إجمالي ملغيات السلسلة", "Chain Failed Orders"), f"{cp.get('fail_orders', '-')} ({cp.get('fail_rate', '-')})")
-                    c3.metric(T("متوسط نسبة الإلغاء", "Chain Fail Rate"), cp.get("fail_rate", "-"))
-                    c4.metric(T("معدل شكاوى السلسلة", "Chain Contact Rate"), cp.get("contact_rate", "-"))
-                    c5.metric(T("شكاوى خطأ فروع السلسلة", "Chain Fault CR"), cp.get("fault_cr", "-"))
-                    st.markdown("---")
-            else:
-                vr = vd.iloc[0]
-                v_nm = vr["clean_name"]
-                v_cid = vr["clean_cid"]
-                v_cnm = vr.get("clean_chain_name", "")
-                v_city = vr.get("clean_city", "")
-                v_am = vr.get("clean_am", "-")
-                has_real_coords = pd.notna(vr["lat"]) and pd.notna(vr["lng"])
-                has_loc = has_real_coords
-                
-                st.success(f"🏬 **{v_nm}** | {T('المدينة', 'City')}: {v_city} | Vendor ID: `{t_vid}` | Chain: {v_cnm} (`{v_cid}`) | AM: `{v_am}`")
+            has_real_coords = pd.notna(vd["lat"]).any() and pd.notna(vd["lng"]).any()
+            has_loc = has_real_coords
 
-                vp, cp = get_vendor_and_chain_perf(t_vid, v_cid, df_performance)
-                if vp or cp:
-                    st.subheader(T("📊 مؤشرات الأداء (Performance Metrics)", "📊 Performance Metrics"))
-                    t1, t2 = st.tabs([
-                        T(f"🏬 أداء الفرع ({v_nm})", f"🏬 Branch ({v_nm})"),
-                        T(f"🏢 أداء السلسلة ({v_cnm})", f"🏢 Chain ({v_cnm})")
-                    ])
-                    with t1:
-                        if vp:
-                            c1, c2, c3, c4, c5 = st.columns(5)
-                            c1.metric(T("الطلبات الصافية", "QC Net Orders"), vp.get("qc_orders", "-"))
-                            c2.metric(T("الطلبات الملغاة", "Failed Orders"), f"{vp.get('fail_orders', '-')} ({vp.get('fail_rate', '-')})")
-                            c3.metric(T("نسبة الإلغاء", "Fail Rate"), vp.get("fail_rate", "-"))
-                            c4.metric(T("معدل الشكاوى", "Contact Rate"), vp.get("contact_rate", "-"))
-                            c5.metric(T("شكاوى خطأ الفرع", "Vendor Fault CR"), vp.get("fault_cr", "-"))
-                        else:
-                            st.info(T("لا توجد بيانات أداء مسجلة لهذا الفرع.", "No performance data found."))
-                    with t2:
-                        if cp:
-                            c1, c2, c3, c4, c5 = st.columns(5)
-                            c1.metric(T("إجمالي طلبات السلسلة", "Chain Net Orders"), cp.get("qc_orders", "-"))
-                            c2.metric(T("إجمالي ملغيات السلسلة", "Chain Failed Orders"), f"{cp.get('fail_orders', '-')} ({cp.get('fail_rate', '-')})")
-                            c3.metric(T("متوسط نسبة الإلغاء", "Chain Fail Rate"), cp.get("fail_rate", "-"))
-                            c4.metric(T("معدل شكاوى السلسلة", "Chain Contact Rate"), cp.get("contact_rate", "-"))
-                            c5.metric(T("شكاوى خطأ فروع السلسلة", "Chain Fault CR"), cp.get("fault_cr", "-"))
-                        else:
-                            st.info(T("لا توجد بيانات مجمعة لهذه السلسلة.", "No chain performance data available."))
-                    st.markdown("---")
+            # تجهيز خريطة ألوان الفروع
+            branch_color_map = {}
+            branch_names = {}
+            for idx, (_, b_row) in enumerate(vd.iterrows()):
+                pal_entry = BRANCH_PALETTE[idx % len(BRANCH_PALETTE)]
+                b_vid = str(b_row["clean_vid"])
+                branch_names[b_vid] = b_row["clean_name"]
+                branch_color_map[b_vid] = {
+                    "name": b_row["clean_name"],
+                    "hex": pal_entry.get("hex", "#28a745"),
+                    "folium": pal_entry.get("folium", "green"),
+                    "chain": b_row.get("clean_chain_name", "")
+                }
 
-            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 40, 10, key="portal_radius_slider")
-            
-            if has_loc:
-                if is_multi:
-                    pa = gdf_areas[gdf_areas.geometry.intersects(Point(vd["lng"].mean(), vd["lat"].mean()).buffer(rad / 111.0))].copy()
+            # جلب كشف أسماء المناطق الجغرافية بالكامل
+            all_known_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
+            zlk = {z.strip().lower(): z for z in all_known_zones}
+
+            # تهيئة حالة الجلسة الخاصة بالمناطق والتسعير للفرع/السلسلة
+            if st.session_state.get("portal_session_id") != portal_session_key:
+                st.session_state["portal_session_id"] = portal_session_key
+                original_alloc = {str(b_vid): {} for b_vid in branch_names.keys()}
+                
+                vids_in_scope = set(branch_names.keys())
+                if not df_delivery.empty and "clean_vid" in df_delivery.columns:
+                    m_del = df_delivery[df_delivery["clean_vid"].isin(vids_in_scope)]
+                    for _, r in m_del.iterrows():
+                        v_id = str(r.get("clean_vid", ""))
+                        zn = zlk.get(str(r.get("clean_zone", "")).strip().lower())
+                        if zn and v_id in original_alloc:
+                            fee_val = 0.0
+                            raw_fee = str(r.get("clean_fee", "")).strip()
+                            try: fee_val = float(raw_fee)
+                            except: fee_val = 0.0
+                            original_alloc[v_id][zn] = {
+                                "time": str(r.get("clean_time", "45 mins")),
+                                "fee": fee_val
+                            }
+                
+                import copy
+                st.session_state["portal_orig_alloc"] = copy.deepcopy(original_alloc)
+                st.session_state["portal_working_alloc"] = copy.deepcopy(original_alloc)
+                st.session_state["portal_active_vid"] = list(branch_names.keys())[0] if branch_names else ""
+                st.session_state["portal_show_diff"] = False
+
+            working_alloc = st.session_state.get("portal_working_alloc", {})
+            orig_alloc = st.session_state.get("portal_orig_alloc", {})
+
+            # عرض دليل الألوان للفروع في وضع السلسلة
+            if len(vd) > 1:
+                st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
+                n_cols = min(max(len(vd), 1), 4)
+                leg_cols = st.columns(n_cols)
+                for idx, (b_vid, b_info) in enumerate(branch_color_map.items()):
+                    with leg_cols[idx % n_cols]:
+                        zone_count = len(working_alloc.get(b_vid, {}))
+                        st.markdown(
+                            f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 5px solid {b_info['hex']}; background: #f8f9fa; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
+                            f"<b>{b_info['name']}</b> ({zone_count} منطقة)<br><span style='color:gray;'>Vendor ID: {b_vid}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
+
+            # 1. تجميع المضلعات الجغرافية (نضمن ظهور كافة المناطق المغطاة + المحيط الجغرافي)
+            all_chain_covered_zones = set()
+            for v_id, z_dict in working_alloc.items():
+                for z in z_dict:
+                    all_chain_covered_zones.add(z.strip().lower())
+
+            covered_mask = gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(all_chain_covered_zones) if not gdf_areas.empty else pd.Series(dtype=bool)
+            covered_gdf = gdf_areas[covered_mask].copy() if not gdf_areas.empty else gpd.GeoDataFrame()
+
+            if has_loc and not gdf_areas.empty:
+                valid_coords = vd.dropna(subset=["lat", "lng"])
+                if not valid_coords.empty:
+                    branch_pts = MultiPoint([Point(r['lng'], r['lat']) for _, r in valid_coords.iterrows()])
+                    nearby_mask = gdf_areas.geometry.intersects(branch_pts.buffer(rad / 111.0))
+                    nearby_gdf = gdf_areas[nearby_mask].copy()
+                    pa = pd.concat([covered_gdf, nearby_gdf]).drop_duplicates(subset=["Delivery Location Area Name"])
                 else:
-                    pa = get_nearby_polygons(vr["lat"], vr["lng"], rad)
+                    pa = covered_gdf if not covered_gdf.empty else gdf_areas.head(50).copy()
             else:
-                pa = gdf_areas.head(30).copy() if not gdf_areas.empty else gpd.GeoDataFrame()
-                
-            az = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
-            zlk = {z.strip().lower(): z for z in az}
+                pa = covered_gdf if not covered_gdf.empty else (gdf_areas.head(50).copy() if not gdf_areas.empty else gpd.GeoDataFrame())
 
-            pf_z, pf_d = [], {}
-            if not df_delivery.empty and "clean_vid" in df_delivery.columns:
-                m_del = df_delivery[df_delivery["clean_vid"].isin(vd["clean_vid"])] if is_multi else df_delivery[df_delivery["clean_vid"] == t_vid]
-                for _, r in m_del.iterrows():
-                    zn = zlk.get(str(r.get("clean_zone", "")).strip().lower())
-                    if zn:
-                        if zn not in pf_z: pf_z.append(zn)
-                        pf_d[zn] = {
-                            "time": str(r.get("clean_time", "")),
-                            "fees": float(r.get("clean_fee", 0.0)) if pd.notna(r.get("clean_fee")) and str(r.get("clean_fee")).replace('.','').isdigit() else None,
-                            "vid": str(r.get("clean_vid", "")) if is_multi else None
-                        }
-
-            if st.session_state.get("vp_id") != t_vid:
-                st.session_state.update({
-                    "vp_id": t_vid,
-                    "ms_z": list(pf_z),
-                    "ap_z": list(pf_z),
-                    "pf_z": list(pf_z),
-                    "pf_d": pf_d,
-                    "ms_v": 0,
-                    "show_t": False
-                })
-
-            valid_z = [z for z in st.session_state.get("ap_z", []) if z in az]
+            # بناء جدول ربط المنطقة بالفرع لتلوين الخريطة
+            zone_to_branch_owner = {}
+            for v_id, z_dict in working_alloc.items():
+                for z in z_dict:
+                    zone_to_branch_owner[z.strip().lower()] = v_id
 
             cm, cf = st.columns([6, 4])
-            with cm:
-                st.subheader(f"🗺️ Map ({len(valid_z)} {T('منطقة مطبقة', 'Zones Applied')})")
-                st.caption(T("💡 انقر على المناطق التي تريد إضافتها/إزالتها، ثم اضغط 'Apply to Map' بالأعلى لترقية الخريطة.", "💡 Click zones to select/deselect, then click 'Apply to Map'."))
-
-                mcnt = [vd["lat"].mean(), vd["lng"].mean()] if (is_multi and has_loc) else ([vr["lat"], vr["lng"]] if has_loc else [30.04, 31.23])
-                vmap = folium.Map(location=mcnt, zoom_start=13 if has_real_coords else 11)
+            
+            with cf:
+                st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
-                if has_loc:
-                    plot_branches = vd.dropna(subset=["lat", "lng"]) if is_multi else vd.iloc[[0]]
-                    for _, rv in plot_branches.iterrows():
+                # اختيار الفرع النشط للتعديل
+                if len(vd) > 1:
+                    branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
+                    curr_active_vid = st.session_state.get("portal_active_vid", list(branch_names.keys())[0])
+                    if curr_active_vid not in branch_select_opts:
+                        curr_active_vid = list(branch_names.keys())[0]
+                    active_vid = st.selectbox(
+                        T("🏬 اختر الفرع المستهدف للتعديل:", "🏬 Select Target Branch to Edit:"),
+                        options=list(branch_select_opts.keys()),
+                        index=list(branch_select_opts.keys()).index(curr_active_vid),
+                        format_func=lambda x: branch_select_opts[x],
+                        key="portal_active_branch_select"
+                    )
+                    st.session_state["portal_active_vid"] = active_vid
+                else:
+                    active_vid = str(vd.iloc[0]["clean_vid"])
+                    st.session_state["portal_active_vid"] = active_vid
+                    st.info(f"🏬 **{branch_names.get(active_vid)}** (Vendor ID: `{active_vid}`)")
+
+                active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
+                active_branch_name = branch_names.get(active_vid, active_vid)
+
+                st.markdown(f"<div style='border-left: 4px solid {active_branch_color}; padding-left: 8px; margin-bottom: 12px; font-weight: bold;'>الفرع المحدد حالياً: {active_branch_name}</div>", unsafe_allow_html=True)
+
+                # الأزرار والخيارات الثلاثة للتعديل
+                action_mode = st.radio(
+                    T("اختر نوع التعديل:", "Select Action:"),
+                    options=[
+                        T("✏️ تعديل الوقت والرسوم لمناطق حالية", "✏️ Edit Time & Fees"),
+                        T("➕ إضافة منطقة لهذا الفرع", "➕ Add Zone to Branch"),
+                        T("🗑️ إزالة منطقة من هذا الفرع", "🗑️ Remove Zone from Branch")
+                    ],
+                    key="portal_action_mode_radio"
+                )
+
+                active_branch_zones = working_alloc.get(active_vid, {})
+                active_zones_keys = sorted(list(active_branch_zones.keys()))
+
+                # 1. وضع تعديل الوقت والرسوم
+                if "تعديل" in action_mode or "Edit" in action_mode:
+                    if not active_zones_keys:
+                        st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
+                    else:
+                        selected_edit_zone = st.selectbox(
+                            T("اختر المنطقة للتعديل:", "Select Zone to Edit:"),
+                            options=active_zones_keys,
+                            key="portal_edit_zone_select"
+                        )
+                        cur_z_info = active_branch_zones.get(selected_edit_zone, {})
+                        c_t1, c_t2 = st.columns(2)
+                        with c_t1:
+                            edit_time_val = st.text_input(
+                                T("وقت التوصيل الجديد:", "New Delivery Time:"),
+                                value=cur_z_info.get("time", "45 mins"),
+                                key="edit_time_input"
+                            )
+                        with c_t2:
+                            edit_fee_val = st.number_input(
+                                T("رسوم التوصيل الجديدة (EGP):", "New Fee (EGP):"),
+                                value=float(cur_z_info.get("fee", 25.0)),
+                                step=1.0,
+                                key="edit_fee_input"
+                            )
+                        if st.button(T("💾 حفظ تعديل المنطقة", "💾 Save Zone Update"), type="primary", use_container_width=True):
+                            working_alloc[active_vid][selected_edit_zone] = {
+                                "time": str(edit_time_val).strip(),
+                                "fee": float(edit_fee_val)
+                            }
+                            st.session_state["portal_working_alloc"] = working_alloc
+                            st.session_state["portal_show_diff"] = False
+                            st.success(T(f"تم تحديث بيانات منطقة {selected_edit_zone} بنجاح!", f"Updated {selected_edit_zone}!"))
+                            st.rerun()
+
+                # 2. وضع إضافة منطقة
+                elif "إضافة" in action_mode or "Add" in action_mode:
+                    available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
+                    if not available_to_add:
+                        st.info(T("تمت إضافة كافة المناطق المتاحة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
+                    else:
+                        selected_add_zone = st.selectbox(
+                            T("اختر المنطقة لإضافتها للفرع:", "Select Zone to Add:"),
+                            options=available_to_add,
+                            key="portal_add_zone_select"
+                        )
+                        # فحص ما إذا كانت المنطقة مسجلة لفرع آخر في السلسلة
+                        other_owner_vid = zone_to_branch_owner.get(selected_add_zone.strip().lower())
+                        if other_owner_vid and other_owner_vid != active_vid:
+                            other_b_name = branch_names.get(other_owner_vid, other_owner_vid)
+                            st.warning(T(
+                                f"⚠️ تنبيه: هذه المنطقة مسجلة حالياً لـ ({other_b_name}). إضافتها هنا ستنقل تغطيتها تلقائياً إلى ({active_branch_name}).",
+                                f"⚠️ Note: This zone is currently assigned to ({other_b_name}). Adding it here will transfer it to ({active_branch_name})."
+                            ))
+                            default_time = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("time", "45 mins")
+                            default_fee = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("fee", 25.0)
+                        else:
+                            default_time = "45 mins"
+                            default_fee = 25.0
+
+                        c_a1, c_a2 = st.columns(2)
+                        with c_a1:
+                            add_time_val = st.text_input(T("وقت التوصيل المقترح:", "Delivery Time:"), value=default_time, key="add_time_input")
+                        with c_a2:
+                            add_fee_val = st.number_input(T("رسوم التوصيل المقترحة (EGP):", "Fees (EGP):"), value=float(default_fee), step=1.0, key="add_fee_input")
+
+                        if st.button(T("➕ تأكيد إضافة المنطقة لهذا الفرع", "➕ Add Zone to Branch"), type="primary", use_container_width=True):
+                            # إذا كانت لفرع آخر، نحذفها منه
+                            if other_owner_vid and other_owner_vid in working_alloc and selected_add_zone in working_alloc[other_owner_vid]:
+                                del working_alloc[other_owner_vid][selected_add_zone]
+                            
+                            working_alloc[active_vid][selected_add_zone] = {
+                                "time": str(add_time_val).strip(),
+                                "fee": float(add_fee_val)
+                            }
+                            st.session_state["portal_working_alloc"] = working_alloc
+                            st.session_state["portal_show_diff"] = False
+                            st.success(T(f"تمت إضافة منطقة {selected_add_zone} لـ {active_branch_name} بنجاح!", f"Added {selected_add_zone}!"))
+                            st.rerun()
+
+                # 3. وضع إزالة منطقة
+                elif "إزالة" in action_mode or "Remove" in action_mode:
+                    if not active_zones_keys:
+                        st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
+                    else:
+                        selected_remove_zone = st.selectbox(
+                            T("اختر المنطقة لإزالتها من الفرع:", "Select Zone to Remove:"),
+                            options=active_zones_keys,
+                            key="portal_remove_zone_select"
+                        )
+                        if st.button(T("🗑️ تأكيد إزالة المنطقة من هذا الفرع", "🗑️ Remove Zone"), type="secondary", use_container_width=True):
+                            if selected_remove_zone in working_alloc[active_vid]:
+                                del working_alloc[active_vid][selected_remove_zone]
+                            st.session_state["portal_working_alloc"] = working_alloc
+                            st.session_state["portal_show_diff"] = False
+                            st.success(T(f"تمت إزالة منطقة {selected_remove_zone} من {active_branch_name}!", f"Removed {selected_remove_zone}!"))
+                            st.rerun()
+
+                st.markdown("---")
+                btn_c1, btn_c2 = st.columns(2)
+                with btn_c1:
+                    if st.button(T("👁️ تحديث الخريطة (Apply)", "👁️ Apply to Map"), use_container_width=True):
+                        st.session_state["portal_show_diff"] = False
+                        st.rerun()
+                with btn_c2:
+                    if st.button(T("🚀 تأكيد وتسعير (Submit)", "🚀 Submit Selection"), type="primary", use_container_width=True):
+                        st.session_state["portal_show_diff"] = True
+                        st.rerun()
+
+            with cm:
+                st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
+                st.caption(T("💡 الخريطة توضح مناطق كل فرع بلونه المميز. المناطق المحددة للفرع النشط حالياً تظهر بحدود عريضة وواضحة.", "💡 Map shows each branch's zones with distinct colors. Active branch zones are highlighted with thicker borders."))
+
+                # حساب مركز الخريطة
+                valid_coords = vd.dropna(subset=["lat", "lng"])
+                if not valid_coords.empty:
+                    mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
+                    zoom_lvl = 12 if is_multi else 13
+                else:
+                    mcnt = [30.0444, 31.2357]
+                    zoom_lvl = 11
+
+                vmap = folium.Map(location=mcnt, zoom_start=zoom_lvl)
+
+                # دبابيس الفروع بألوانها المتناسقة
+                if not valid_coords.empty:
+                    for _, rv in valid_coords.iterrows():
+                        b_id_str = str(rv["clean_vid"])
+                        b_info = branch_color_map.get(b_id_str, {"hex": "#28a745", "folium": "green"})
+                        is_active_b = (b_id_str == active_vid)
+                        
+                        popup_html = f"""<div style='font-family: Arial, sans-serif; font-size: 11px; width: 200px;'>
+                        <b style='color: #0d6efd;'>💊 {rv['clean_name']}</b><br>
+                        <b>ID:</b> <code>{b_id_str}</code><br>
+                        <b>{T('المناطق المغطاة', 'Covered Zones')}:</b> {len(working_alloc.get(b_id_str, {}))}<br>
+                        {'<span style="color: green; font-weight: bold;">(الفرع النشط للتعديل ✏️)</span>' if is_active_b else ''}
+                        </div>"""
+
                         folium.Marker(
                             [rv["lat"], rv["lng"]],
-                            tooltip=f"💊 {rv['clean_name']}",
-                            popup=f"<b>{rv['clean_name']}</b><br>ID: {rv['clean_vid']}",
-                            icon=folium.Icon(color="green", icon="medkit", prefix="fa")
+                            tooltip=f"💊 {rv['clean_name']} (ID: {b_id_str})",
+                            popup=folium.Popup(popup_html, max_width=250),
+                            icon=folium.Icon(color=b_info.get("folium", "green"), icon="medkit", prefix="fa")
                         ).add_to(vmap)
 
-                vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ffc107; stroke-width:3px;}</style>"))
+                vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ffc107 !important; stroke-width:3px !important;}</style>"))
+
+                # رسم وتلوين المضلعات الجغرافية
                 if not pa.empty:
+                    def get_portal_zone_styling(feature):
+                        z_name_norm = str(feature["properties"].get("Delivery Location Area Name", "")).strip().lower()
+                        if z_name_norm in zone_to_branch_owner:
+                            owner_vid = zone_to_branch_owner[z_name_norm]
+                            b_hex = branch_color_map.get(owner_vid, {}).get("hex", "#28a745")
+                            is_active_owner = (owner_vid == active_vid)
+                            return {
+                                "fillColor": b_hex,
+                                "color": b_hex,
+                                "weight": 3.0 if is_active_owner else 1.5,
+                                "fillOpacity": 0.6 if is_active_owner else 0.35
+                            }
+                        return {
+                            "fillColor": "#3388ff",
+                            "color": "#002266",
+                            "weight": 1.0,
+                            "fillOpacity": 0.08
+                        }
+
                     folium.GeoJson(
                         pa[["Delivery Location Area Name", "geometry"]].to_json(),
-                        style_function=lambda f: {
-                            "fillColor": "#28a745" if f["properties"]["Delivery Location Area Name"] in valid_z else "#3388ff",
-                            "color": "#155724" if f["properties"]["Delivery Location Area Name"] in valid_z else "#002266",
-                            "weight": 2,
-                            "fillOpacity": 0.5 if f["properties"]["Delivery Location Area Name"] in valid_z else 0.15
-                        },
-                        tooltip=folium.GeoJsonTooltip(["Delivery Location Area Name"])
+                        style_function=get_portal_zone_styling,
+                        tooltip=folium.GeoJsonTooltip(
+                            fields=["Delivery Location Area Name"],
+                            aliases=[T("المنطقة: ", "Zone: ")]
+                        )
                     ).add_to(vmap)
 
                 mcd = st_folium(
                     vmap,
                     width="100%",
-                    height=500,
-                    key=f"vmap_interactive_{t_vid}_{rad}",
+                    height=520,
+                    key=f"vmap_interactive_portal_{portal_session_key}_{rad}",
                     returned_objects=["last_object_clicked"]
                 )
+
+                # التفاعل مع الكليك على الخريطة
                 if mcd and mcd.get("last_object_clicked"):
-                    zc = mcd["last_object_clicked"].get("properties", {}).get("Delivery Location Area Name")
-                    if zc and zc in az:
-                        cs = f"{zc}_{np.random.randint(100)}"
-                        if cs != st.session_state.get("lc"):
-                            st.session_state["lc"] = cs
-                            if zc in st.session_state["ms_z"]: st.session_state["ms_z"].remove(zc)
-                            else: st.session_state["ms_z"].append(zc)
-                            st.session_state["ap_z"] = list(st.session_state["ms_z"])
-                            st.session_state["show_t"] = False
-                            st.session_state["ms_v"] = st.session_state.get("ms_v", 0) + 1
-                            st.rerun()
+                    clicked_poly_name = mcd["last_object_clicked"].get("properties", {}).get("Delivery Location Area Name")
+                    if clicked_poly_name and clicked_poly_name in all_known_zones:
+                        c_sig = f"{clicked_poly_name}_{np.random.randint(100)}"
+                        if c_sig != st.session_state.get("last_poly_click_sig"):
+                            st.session_state["last_poly_click_sig"] = c_sig
+                            # في وضع الإزالة: نزيلها مباشرة
+                            if "إزالة" in action_mode or "Remove" in action_mode:
+                                if clicked_poly_name in working_alloc.get(active_vid, {}):
+                                    del working_alloc[active_vid][clicked_poly_name]
+                                    st.session_state["portal_working_alloc"] = working_alloc
+                                    st.session_state["portal_show_diff"] = False
+                                    st.rerun()
 
-            with cf:
-                st.subheader(f"📝 {T('المناطق المحددة', 'Selected Zones')}")
-                cz = st.multiselect(
-                    T("مناطق الخدمة والتوصيل:", "Service Areas:"),
-                    az,
-                    default=st.session_state["ms_z"],
-                    key=f"ms_box_{st.session_state.get('ms_v', 0)}"
-                )
-                b1, b2 = st.columns(2)
-                if b1.button(T("👁️ تحديث الخريطة", "Apply to Map"), use_container_width=True):
-                    st.session_state.update({"ap_z": cz.copy(), "ms_z": cz.copy(), "show_t": False})
-                    st.rerun()
-                if b2.button(T("🚀 تأكيد وتسعير", "Submit Selection"), type="primary", use_container_width=True):
-                    st.session_state.update({"ap_z": cz.copy(), "ms_z": cz.copy(), "show_t": True})
-                    st.rerun()
-
-            if st.session_state.get("show_t"):
+            # ==========================================
+            # جدول المعاينة والحفظ (يعرض فقط المناطق المعدلة حصرياً)
+            # ==========================================
+            if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
-                st.subheader(T("💰 جدول التسعير وتوزيع الفروع", "Pricing & Allocation Table"))
+                st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
                 st.caption(T(
-                    "يوضح الجدول حالة كل منطقة وإمكانية توزيعها وتعيين الفرع المسؤول عنها:",
-                    "Table shows zone status and allows assigning each zone to a branch:"
+                    "يعرض هذا الجدول حصرياً المناطق التي طرأ عليها تعديل (إضافة جديدة، إزالة، أو تحديث سعر/وقت) تمهيداً لاعتمادها وإرسالها للإدارة:",
+                    "This table shows exclusively the zones that were modified (new additions, removals, or price/time updates):"
                 ))
 
-                all_rz = list(st.session_state["ap_z"]) + [z for z in st.session_state["pf_z"] if z not in st.session_state["ap_z"]]
-                th = ",".join(sorted(all_rz)) + str(is_multi)
+                # حساب التعديلات الفعلية (Diff)
+                diff_rows = []
+                all_vids_eval = set(orig_alloc.keys()) | set(working_alloc.keys())
 
-                if st.session_state.get("ph") != th:
-                    rws = []
-                    v_opts = [T("غير مخصص", "Unassigned")] + [f"{r['clean_name']} ({r['clean_vid']})" for _, r in vd.iterrows()]
-                    for z in all_rz:
-                        pdc = st.session_state["pf_d"].get(z, {})
-                        isex = z in st.session_state["pf_z"]
-                        isap = z in st.session_state["ap_z"]
+                for v_id in all_vids_eval:
+                    b_lbl = f"{branch_names.get(v_id, v_id)} ({v_id})"
+                    o_zones = orig_alloc.get(v_id, {})
+                    w_zones = working_alloc.get(v_id, {})
 
-                        astr = T("غير مخصص", "Unassigned")
-                        if is_multi and pdc.get("vid"):
-                            mv = vd[vd["clean_vid"] == pdc["vid"]]
-                            if not mv.empty:
-                                astr = f"{mv.iloc[0]['clean_name']} ({pdc['vid']})"
+                    # 1. المناطق التي أزيلت
+                    for z in o_zones:
+                        if z not in w_zones:
+                            diff_rows.append({
+                                "Vendor ID": v_id,
+                                "Branch Name": branch_names.get(v_id, v_id),
+                                "Assigned Branch": b_lbl,
+                                "Zone": z,
+                                "Change Type": T("🗑️ إزالة منطقة", "🗑️ Removal"),
+                                "Status": T("مسجلة سابقاً", "Existing"),
+                                "Action": T("إلغاء التفعيل", "Deactivate"),
+                                "Delivery Time": o_zones[z].get("time", "-"),
+                                "Delivery Fees (EGP)": float(o_zones[z].get("fee", 0.0) or 0.0)
+                            })
 
-                        rd = {
-                            "Zone": z,
-                            "Status": T("📌 مسجلة", "📌 Existing") if isex else T("✨ جديدة", "✨ New"),
-                            "Action": T("نشط", "Active") if isap else T("إلغاء التفعيل", "Deactivate"),
-                            "Time": pdc.get("time", "") if isap else "",
-                            "Fees": pdc.get("fees", None) if isap else 0.0
-                        }
-                        if is_multi:
-                            rd["Assigned Branch"] = astr
-                        rws.append(rd)
+                    # 2. المناطق المضافة أو المعدلة
+                    for z in w_zones:
+                        w_item = w_zones[z]
+                        if z not in o_zones:
+                            diff_rows.append({
+                                "Vendor ID": v_id,
+                                "Branch Name": branch_names.get(v_id, v_id),
+                                "Assigned Branch": b_lbl,
+                                "Zone": z,
+                                "Change Type": T("✨ إضافة جديدة", "✨ New Addition"),
+                                "Status": T("منطقة جديدة", "New Zone"),
+                                "Action": T("نشط", "Active"),
+                                "Delivery Time": str(w_item.get("time", "45 mins")),
+                                "Delivery Fees (EGP)": float(w_item.get("fee", 25.0) or 0.0)
+                            })
+                        else:
+                            o_item = o_zones[z]
+                            t_chg = str(o_item.get("time", "")).strip() != str(w_item.get("time", "")).strip()
+                            f_chg = float(o_item.get("fee", 0.0) or 0.0) != float(w_item.get("fee", 0.0) or 0.0)
+                            if t_chg or f_chg:
+                                diff_rows.append({
+                                    "Vendor ID": v_id,
+                                    "Branch Name": branch_names.get(v_id, v_id),
+                                    "Assigned Branch": b_lbl,
+                                    "Zone": z,
+                                    "Change Type": T("✏️ تعديل سعر / وقت", "✏️ Update Time/Fee"),
+                                    "Status": T("تحديث بيانات", "Updated"),
+                                    "Action": T("نشط", "Active"),
+                                    "Delivery Time": str(w_item.get("time", "")),
+                                    "Delivery Fees (EGP)": float(w_item.get("fee", 0.0) or 0.0)
+                                })
 
-                    st.session_state["pdf"] = pd.DataFrame(rws)
-                    st.session_state["ph"] = th
-                    st.session_state["vopts"] = v_opts
+                if not diff_rows:
+                    st.info(T("ℹ️ لم يتم العثور على أي تعديلات جديدة مقارنة بالبيانات الأصلية.", "ℹ️ No modifications found compared to original allocations."))
+                else:
+                    diff_df = pd.DataFrame(diff_rows)
 
-                ccf = {
-                    "Zone": st.column_config.TextColumn(T("اسم المنطقة", "Zone Name"), disabled=True),
-                    "Status": st.column_config.TextColumn(T("نوع المنطقة", "Type"), disabled=True),
-                    "Action": st.column_config.SelectboxColumn(
-                        T("الحالة / الإجراء", "Action"),
-                        options=[T("نشط", "Active"), T("إلغاء التفعيل", "Deactivate")],
-                        required=True
-                    ),
-                    "Time": st.column_config.TextColumn(T("وقت التوصيل المقدر", "Delivery Time")),
-                    "Fees": st.column_config.NumberColumn(T("رسوم التوصيل (EGP)", "Fees (EGP)"))
-                }
-                if is_multi:
-                    ccf["Assigned Branch"] = st.column_config.SelectboxColumn(
-                        T("الفرع المسؤول (التوزيع)", "Assigned Branch"),
-                        options=st.session_state["vopts"],
-                        required=True
+                    column_configs = {
+                        "Assigned Branch": st.column_config.TextColumn(T("الفرع المسؤول", "Assigned Branch"), disabled=True),
+                        "Zone": st.column_config.TextColumn(T("اسم المنطقة", "Zone Name"), disabled=True),
+                        "Change Type": st.column_config.TextColumn(T("نوع التعديل", "Change Type"), disabled=True),
+                        "Status": st.column_config.TextColumn(T("حالة السجل", "Record Status"), disabled=True),
+                        "Action": st.column_config.SelectboxColumn(
+                            T("الإجراء", "Action"),
+                            options=[T("نشط", "Active"), T("إلغاء التفعيل", "Deactivate")],
+                            required=True
+                        ),
+                        "Delivery Time": st.column_config.TextColumn(T("وقت التوصيل المقدر", "Delivery Time")),
+                        "Delivery Fees (EGP)": st.column_config.NumberColumn(T("رسوم التوصيل (EGP)", "Fees (EGP)"))
+                    }
+
+                    display_diff_df = diff_df.drop(columns=["Vendor ID", "Branch Name"], errors="ignore")
+
+                    edited_diff = st.data_editor(
+                        display_diff_df,
+                        column_config=column_configs,
+                        use_container_width=True,
+                        hide_index=True,
+                        key="portal_diff_editor"
                     )
 
-                edf = st.data_editor(
-                    st.session_state["pdf"],
-                    column_config=ccf,
-                    use_container_width=True,
-                    hide_index=True,
-                    key="pricing_editor"
-                )
+                    if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary"):
+                        # حفظ التعديلات لكل فرع
+                        for v_id in diff_df["Vendor ID"].unique():
+                            b_vname = diff_df[diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
+                            branch_indices = diff_df[diff_df["Vendor ID"] == v_id].index
+                            b_sub_df = edited_diff.loc[branch_indices].copy()
 
-                if st.button(T("✅ إرسال التحديث للإدارة", "✅ Finalize & Send to Admin"), type="primary"):
-                    err = False
-                    act = edf[edf["Action"].str.contains("Active|نشط", case=False, na=False)]
-                    if act["Time"].eq("").any() or act["Fees"].isnull().any():
-                        st.error(T("⚠️ يرجى إكمال الوقت ورسوم التوصيل للمناطق النشطة.", "⚠️ Please specify delivery time and fees for active zones."))
-                        err = True
-                    if is_multi and act["Assigned Branch"].str.contains("Unassigned|غير مخصص", na=False).any():
-                        st.error(T("⚠️ يرجى تعيين فرع لكل منطقة في وضع التوزيع المجمع.", "⚠️ Please assign a branch to every active zone."))
-                        err = True
+                            b_sub_df["Final_Status"] = b_sub_df.apply(
+                                lambda r: "Deactivated" if ("Deactivate" in str(r["Action"]) or "إلغاء" in str(r["Action"])) else (
+                                    "Active (New)" if ("جديدة" in str(r["Status"]) or "New" in str(r["Status"])) else "Active (Existing)"
+                                ), axis=1
+                            )
+                            b_sub_df["Distance (km)"] = "-"
+                            b_sub_df["Classification"] = "Vendor Zone Update"
 
-                    if not err:
-                        if is_multi:
-                            for bopt in act["Assigned Branch"].unique():
-                                m_match = re.search(r"\((.*?)\)", str(bopt))
-                                bvid = m_match.group(1) if m_match else "MULTI"
-                                bnm = str(bopt).split("(")[0].strip()
-                                bdf = edf[edf["Assigned Branch"] == bopt].copy()
-                                bdf["Final_Status"] = bdf.apply(lambda r: "Deactivated" if ("Deactivate" in r["Action"] or "إلغاء" in r["Action"]) else ("Active (New)" if ("جديدة" in r["Status"] or "New" in r["Status"]) else "Active (Existing)"), axis=1)
-                                save_detailed_request(bvid, bnm, bdf)
-                            st.success(T("🎉 تم إرسال طلبات التوزيع المجمعة بنجاح!", "🎉 Multi-branch allocation requests submitted successfully!"))
-                        else:
-                            submission_df = edf.copy()
-                            submission_df["Final_Status"] = submission_df.apply(lambda r: "Deactivated" if ("Deactivate" in r["Action"] or "إلغاء" in r["Action"]) else ("Active (New)" if ("جديدة" in r["Status"] or "New" in r["Status"]) else "Active (Existing)"), axis=1)
-                            save_detailed_request(t_vid, v_nm, submission_df)
-                            st.success(T("🎉 تم إرسال الطلب بنجاح!", "🎉 Request submitted successfully!"))
+                            save_detailed_request(v_id, b_vname, b_sub_df)
+
+                        st.success(T("🎉 تم إرسال وتوثيق كافة التعديلات بنجاح إلى الإدارة!", "🎉 All modifications submitted successfully to Admin!"))
+                        st.session_state["portal_show_diff"] = False
+                        # تحديث الأصل ليطابق الحالي
+                        import copy
+                        st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
+                        st.rerun()
 
 # ==========================================
 # Tab 3: Incoming Requests (صفحة الطلبات المجمعة والتحميل المباشر)
@@ -1328,7 +1507,6 @@ if is_admin:
                     raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                     raw_df["Action"] = raw_df.get("Action", "").astype(str)
 
-                    # فلاتر التصفية
                     f_c1, f_c2 = st.columns([1.5, 1.5])
                     with f_c1:
                         all_vn = [T("كل الفروع", "All Vendors")] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
@@ -1344,7 +1522,6 @@ if is_admin:
                     if f_vid != T("كل الأكواد", "All IDs"):
                         filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
 
-                    # تجميع الطلبات حسب كل إرسال (Vendor + Date)
                     summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
                         Total_Zones=("Zone", "count"),
                         Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط", case=False)).sum()),
@@ -1431,7 +1608,7 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع.", "📭 No incoming requests found."))
 
 # ==========================================
-# Tab 4: Users Management (إدارة المستخدمين + تغيير كلمة المرور)
+# Tab 4: Users Management
 # ==========================================
 if is_admin:
     with tab4:
@@ -1492,7 +1669,6 @@ if is_admin:
                     format_func=lambda x: T("مسؤول نظام (Admin)", "Admin") if x == "admin" else T("مستخدم فيندور (Vendor User)", "Vendor User")
                 )
                 
-                # تعديل كلمة المرور للمستخدم المحدد
                 edit_password_val = st.text_input(
                     T("🔑 كلمة المرور الجديدة (اتركه فارغاً للإبقاء على الحالية دون تغيير):", "🔑 New Password (leave blank to keep current):"),
                     type="password"
