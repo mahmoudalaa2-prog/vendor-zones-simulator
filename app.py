@@ -344,7 +344,6 @@ def load_data():
                 mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
                 gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
                 
-            # ترتيب المضلعات تنازلياً للمساحة حتى تُرسم الكبرى أولاً في الخلفية والصغرى في الواجهة
             gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
             centroids = gdf_a.geometry.centroid
             gdf_a["centroid_lat"] = centroids.y
@@ -543,12 +542,11 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     html += "</div>"
     return html
 
-# الدالة الفورية لالتقاط نقرة المضلع من أول مرة دون أي تضارب
+# الدالة الفورية لالتقاط نقرة المضلع بدقة عالية وتفضيل الأصغر مساحة
 def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     if not mcd:
         return None, None
         
-    # 1. القراءة المباشرة من خصائص المضلع المنقور بالماوس (الأسرع والأدق من أول كليك)
     obj = mcd.get("last_object_clicked")
     if obj and isinstance(obj, dict):
         props = obj.get("properties") or {}
@@ -557,8 +555,6 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
             sig = f"obj_{poly_name}_{obj.get('lat')}_{obj.get('lng')}"
             return poly_name, sig
 
-    # 2. فحص النقطة جغرافياً (Point-in-polygon) باختيار المضلع الأصغر مساحة إذا لزم الأمر
-    if obj and isinstance(obj, dict):
         lat, lng = obj.get("lat"), obj.get("lng")
         if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
             pt = Point(lng, lat)
@@ -998,7 +994,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التحديد الفوري من أول نقرة دون أي تأخير)
+# Tab 2: Vendor Portal (التبديل الذكي للوضع + التحديد من أول كليك)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1162,7 +1158,6 @@ with tab2:
             else:
                 pa = covered_gdf if not covered_gdf.empty else (gdf_areas.head(50).copy() if not gdf_areas.empty else gpd.GeoDataFrame())
 
-            # ترتيب المضلعات تنازلياً للمساحة حتى تُرسم الكبرى في الأسفل وتظهر الصغرى في الواجهة
             if not pa.empty and "area_size" in pa.columns:
                 pa = pa.sort_values(by="area_size", ascending=False)
 
@@ -1249,7 +1244,6 @@ with tab2:
                         )
                     ).add_to(vmap)
 
-                # حصر الإرجاع في كائن المضلع المنقور بدقة لتجنب تضارب الإحداثيات القديمة
                 mcd = st_folium(
                     vmap,
                     width="100%",
@@ -1297,32 +1291,36 @@ with tab2:
                         unsafe_allow_html=True
                     )
 
-                action_mode = st.radio(
-                    T("اختر نوع التعديل:", "Select Action:"),
-                    options=[
-                        T("✏️ تعديل الوقت والرسوم لمناطق حالية", "✏️ Edit Time & Fees"),
-                        T("➕ إضافة منطقة لهذا الفرع", "➕ Add Zone to Branch"),
-                        T("🗑️ إزالة منطقة من هذا الفرع", "🗑️ Remove Zone from Branch")
-                    ],
-                    key="portal_action_mode_radio"
-                )
+                opt_edit = T("✏️ تعديل الوقت والرسوم لمناطق حالية", "✏️ Edit Time & Fees")
+                opt_add = T("➕ إضافة منطقة لهذا الفرع", "➕ Add Zone to Branch")
+                opt_del = T("🗑️ إزالة منطقة من هذا الفرع", "🗑️ Remove Zone from Branch")
 
                 active_branch_zones = working_alloc.get(active_vid, {})
                 active_zones_keys = sorted(list(active_branch_zones.keys()))
                 available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
 
-                # مزامنة النقرة من الخريطة مباشرة في قائمة الاختيار المطلوبة من أول كليك
+                # التبديل الذكي التلقائي للوضع بحسب تبعية المنطقة المنقورة
                 just_clicked = st.session_state.pop("just_clicked_map_zone", None)
                 if just_clicked:
-                    if "تعديل" in action_mode or "Edit" in action_mode:
-                        if just_clicked in active_zones_keys:
-                            st.session_state["portal_edit_zone_select"] = just_clicked
-                    elif "إضافة" in action_mode or "Add" in action_mode:
-                        if just_clicked in available_to_add:
-                            st.session_state["portal_add_zone_select"] = just_clicked
-                    elif "إزالة" in action_mode or "Remove" in action_mode:
-                        if just_clicked in active_zones_keys:
+                    if just_clicked in active_zones_keys:
+                        # المنطقة مسجلة للفرع -> توجيه تلقائي للتعديل أو الحذف
+                        curr_m = st.session_state.get("portal_action_mode_radio", opt_edit)
+                        if "إزالة" in curr_m or "Remove" in curr_m:
+                            st.session_state["portal_action_mode_radio"] = opt_del
                             st.session_state["portal_remove_zone_select"] = just_clicked
+                        else:
+                            st.session_state["portal_action_mode_radio"] = opt_edit
+                            st.session_state["portal_edit_zone_select"] = just_clicked
+                    elif just_clicked in available_to_add:
+                        # المنطقة غير مسجلة للفرع -> توجيه تلقائي وفوري لوضع الإضافة
+                        st.session_state["portal_action_mode_radio"] = opt_add
+                        st.session_state["portal_add_zone_select"] = just_clicked
+
+                action_mode = st.radio(
+                    T("اختر نوع التعديل:", "Select Action:"),
+                    options=[opt_edit, opt_add, opt_del],
+                    key="portal_action_mode_radio"
+                )
 
                 # 1. وضع تعديل الوقت والرسوم لمناطق حالية
                 if "تعديل" in action_mode or "Edit" in action_mode:
@@ -1694,7 +1692,7 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع.", "📭 No incoming requests found."))
 
 # ==========================================
-# Tab 4: Users Management (إدارة المستخدمين + تغيير كلمة المرور)
+# Tab 4: Users Management
 # ==========================================
 if is_admin:
     with tab4:
@@ -1755,7 +1753,6 @@ if is_admin:
                     format_func=lambda x: T("مسؤول نظام (Admin)", "Admin") if x == "admin" else T("مستخدم فيندور (Vendor User)", "Vendor User")
                 )
                 
-                # تعديل كلمة المرور للمستخدم المحدد
                 edit_password_val = st.text_input(
                     T("🔑 كلمة المرور الجديدة (اتركه فارغاً للإبقاء على الحالية دون تغيير):", "🔑 New Password (leave blank to keep current):"),
                     type="password"
