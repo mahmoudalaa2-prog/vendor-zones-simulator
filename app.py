@@ -482,6 +482,37 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
     save_df["Status"] = "Pending"
     save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
 
+def build_zone_popup_card(area_name, info_list):
+    if not info_list:
+        return (
+            "<div style='font-family: Arial, sans-serif; font-size: 10.5px; width: 200px; padding: 3px; direction: rtl; text-align: right;'>"
+            + "<b style='color: #0d6efd;'>📍 " + str(area_name) + "</b><br>"
+            + "<span style='color: #6c757d; font-size: 9.5px;'>منطقة عامة (غير مغطاة حالياً)</span>"
+            + "</div>"
+        )
+    
+    branch_count = len(info_list)
+    parts = [
+        "<div style='font-family: Arial, sans-serif; width: 255px; max-height: 175px; overflow-y: auto; padding: 2px; direction: rtl; text-align: right;'>",
+        "<div style='position: sticky; top: 0; background: #ffffff; padding-bottom: 3px; border-bottom: 1.5px solid #0d6efd; margin-bottom: 4px; z-index: 10;'>",
+        "<b style='color: #0d6efd; font-size: 11.5px;'>📍 " + str(area_name) + "</b> <span style='color: #198754; font-size: 9.5px; font-weight: bold;'>(" + str(branch_count) + " فروع)</span>",
+        "</div>",
+        "<div style='display: flex; flex-direction: column; gap: 3px;'>"
+    ]
+    for b in info_list:
+        b_name = b.get("name", "")
+        b_hex = b.get("hex", "#28a745")
+        b_time = b.get("time", "-")
+        b_fee = b.get("fee", "-")
+        parts.append(
+            "<div style='border-right: 3px solid " + str(b_hex) + "; padding: 2px 5px; background: #f8f9fa; border-radius: 3px; font-size: 10px; line-height: 1.25;'>"
+            + "<b style='color: #212529;'>" + str(b_name) + "</b><br>"
+            + "<span style='color: #6c757d; font-size: 9px;'>⏱️ " + str(b_time) + " | 💵 " + str(b_fee) + " EGP</span>"
+            + "</div>"
+        )
+    parts.append("</div></div>")
+    return "".join(parts)
+
 def build_vendor_popup_html(v_row, df_delivery, df_p):
     v_id = str(v_row.get("clean_vid", ""))
     c_id = str(v_row.get("clean_cid", ""))
@@ -876,13 +907,33 @@ if is_admin:
                         if z_clean in zone_to_vendor_info:
                             info_list = zone_to_vendor_info[z_clean]
                             primary_info = info_list[0]
-                            
-                            # بناء بطاقة HTML صغيرة الحجم مع شريط تمرير (Swipe Down)
-                            card_html = f"""<div style='font-family: Arial, sans-serif; width: 255px; max-height: 175px; overflow-y: auto; padding: 2px; direction: rtl; text-align: right;'>
-<div style='position: sticky; top: 0; background: #ffffff; padding-bottom: 3px; border-bottom: 1.5px solid #0d6efd; margin-bottom: 4px; z-index: 10;'>
-<b style='color: #0d6efd; font-size: 11.5px;'>📍 {area_name}</b> <span style='color: #198754; font-size: 9.5px; font-weight: bold;'>({len(info_list)} فروع)</span>
-</div>
-<div style='display: flex; flex-direction: column; gap: 3px;'>"""
-                            for b in info_list:
-                                card_html += f"""<div style='border-right: 3px solid {b.get("hex", "#28a745")}; padding: 2px 5px; background: #f8f9fa; border-radius: 3px; font-size: 10px; line-height: 1.25;'>
-<b style='color: #
+                            prim_hex = primary_info.get("hex", "#28a745")
+                            card_html = build_zone_popup_card(area_name, info_list)
+                            return prim_hex, prim_hex, 0.45, 2.0, card_html, True
+                        
+                        card_html = build_zone_popup_card(area_name, [])
+                        return "#3388ff", "#002266", 0.08, 1.0, card_html, False
+
+                    props = gdf_areas_to_render["Delivery Location Area Name"].apply(assign_zone_styling_and_popup)
+                    gdf_areas_to_render["fill_color"] = [p[0] for p in props]
+                    gdf_areas_to_render["border_color"] = [p[1] for p in props]
+                    gdf_areas_to_render["fill_opacity"] = [p[2] for p in props]
+                    gdf_areas_to_render["weight"] = [p[3] for p in props]
+                    gdf_areas_to_render["popup_html"] = [p[4] for p in props]
+
+                # حساب مركز الخريطة ومستوى التكبير
+                if selected_vendors and not plot_vendors.empty:
+                    map_center = [float(plot_vendors.iloc[0]["lat"]), float(plot_vendors.iloc[0]["lng"])]
+                    zoom_lvl = 13
+                elif not plot_vendors.empty:
+                    mean_lat = float(plot_vendors["lat"].mean())
+                    mean_lng = float(plot_vendors["lng"].mean())
+                    map_center = [mean_lat, mean_lng] if (pd.notna(mean_lat) and pd.notna(mean_lng)) else [30.0444, 31.2357]
+                    zoom_lvl = 12 if selected_chains else (10 if selected_cities else 7)
+                else:
+                    map_center = [30.0444, 31.2357]
+                    zoom_lvl = 7
+
+                m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
+                css_style = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;} path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}</style>"
+                m_admin.get_root().html.add_child(folium.Element(css_
