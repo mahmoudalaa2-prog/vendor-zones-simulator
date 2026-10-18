@@ -18,7 +18,7 @@ from datetime import datetime
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
-# تقليص وتنسيق حجم أرقام الـ Metrics لتصبح مدمجة وأنيقة
+# تقليص أحجام الأرقام وحقن نظام مربعات الاختيار (Checkboxes) داخل القوائم
 st.markdown("""
 <style>
 div[data-testid="stMetricValue"] {
@@ -31,6 +31,34 @@ div[data-testid="stMetricLabel"] {
 div[data-testid="stMetricDelta"] {
     font-size: 12px !important;
 }
+
+/* تنسيق مربعات الاختيار داخل فلاتر القوائم المنسدلة */
+div[data-baseweb="popover"] ul li {
+    display: flex !important;
+    align-items: center !important;
+    padding: 6px 12px !important;
+    cursor: pointer !important;
+}
+div[data-baseweb="popover"] ul li::before {
+    content: "" !important;
+    display: inline-block !important;
+    width: 15px !important;
+    height: 15px !important;
+    margin-left: 8px !important;
+    margin-right: 8px !important;
+    border: 1.8px solid #6c757d !important;
+    border-radius: 3px !important;
+    background-color: transparent !important;
+    flex-shrink: 0 !important;
+}
+div[data-baseweb="popover"] ul li[aria-selected="true"]::before {
+    background-color: #28a745 !important;
+    border-color: #28a745 !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='white' d='M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z'/%3E%3C/svg%3E") !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -40,20 +68,21 @@ if "lang" not in st.session_state:
 def T(ar_text, en_text):
     return ar_text if st.session_state.get("lang", "ar") == "ar" else en_text
 
+# مصفوفة ألوان آمنة وموحدة لجميع الفروع
 BRANCH_PALETTE = [
     {"hex": "#28a745", "folium": "green", "name": "أخضر"},
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
     {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
-    {"hex": "#8540f5", "darkpurple": "darkpurple", "name": "أرجواني"},
+    {"hex": "#8540f5", "folium": "darkpurple", "name": "أرجواني"},
     {"hex": "#a52a2a", "folium": "darkred", "name": "بني"},
     {"hex": "#ffc107", "folium": "orange", "name": "أصفر ذهبي"},
-    {"hex": "#20c997", "cadetblue": "cadetblue", "name": "تيل"},
-    {"hex": "#6610f2", "darkpurple": "darkpurple", "name": "نيلي"},
+    {"hex": "#20c997", "folium": "cadetblue", "name": "تيل"},
+    {"hex": "#6610f2", "folium": "darkpurple", "name": "نيلي"},
     {"hex": "#fd7e14", "folium": "orange", "name": "برتقالي فاقع"},
     {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
 ]
@@ -231,7 +260,7 @@ def load_data():
         cname_col = robust_get_col(df_v, ["Chain Attributes Chain Name", "Chain Name", "chain_name"])
         city_col = robust_get_col(df_v, ["Vendor Attributes Vendor City", "City", "Vendor City"])
 
-        # استخراج عمود مسؤول الحساب بدقة: Chain Attributes Latest Chain AM Name
+        # استخراج عمود مسؤول الحساب: Chain Attributes Latest Chain AM Name
         am_col = None
         for candidate in ["Chain Attributes Latest Chain AM Name", "Latest Chain AM Name", "Vendor Attributes Account Manager", "Account Manager Name", "Account Manager"]:
             for c in df_v.columns:
@@ -613,7 +642,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (فلاتر متعددة الاختيار + شبكة المناطق الكاملة)
+# Tab 1: Admin Map (فلاتر Checklists + شبكة المناطق الكاملة)
 # ==========================================
 if is_admin:
     with tab1:
@@ -627,7 +656,7 @@ if is_admin:
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
-            # الفلاتر الأربعة بنظام القوائم المتعددة الاختيار (Multiselect)
+            # الفلاتر الأربعة بنظام القوائم المتعددة الاختيار (Checklists)
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.4, 1.4, 1.2])
             
             with f_col1:
@@ -740,7 +769,7 @@ if is_admin:
             else:
                 plot_vendors = pd.DataFrame()
 
-            # حساب مؤشرات الأداء الحية المربوطة بشيت Vendors Performance بدقة
+            # حساب مؤشرات الأداء الحية المربوطة بشيت Vendors Performance
             cnt_total, cnt_active, cnt_inactive, tot_orders, tot_failed, rate_str = get_performance_kpis(df_disp, df_performance)
 
             card_col1, card_col2, card_col3, card_col4 = st.columns(4)
@@ -777,10 +806,10 @@ if is_admin:
                     pal_entry = BRANCH_PALETTE[idx % len(BRANCH_PALETTE)]
                     vendor_color_map[b_row["clean_vid"]] = {
                         "name": b_row["clean_name"],
-                        "hex": pal_entry["hex"],
-                        "folium": pal_entry["folium"],
+                        "hex": pal_entry.get("hex", "#28a745"),
+                        "folium": pal_entry.get("folium", "green"),
                         "chain": b_row["clean_chain_name"],
-                        "color_name": pal_entry["name"]
+                        "color_name": pal_entry.get("name", "أخضر")
                     }
 
                 # ربط مناطق التوصيل بالفروع
@@ -873,7 +902,7 @@ if is_admin:
                 css_style = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;} path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}</style>"
                 m_admin.get_root().html.add_child(folium.Element(css_style))
 
-                # رسم مضلعات المناطق وشبكة التوصيل
+                # رسم مضلعات المناطق وشبكة التوصيل كاملة
                 if not gdf_areas_to_render.empty:
                     folium.GeoJson(
                         gdf_areas_to_render[["Delivery Location Area Name", "coverage_info", "fill_color", "border_color", "fill_opacity", "weight", "geometry"]].to_json(),
@@ -905,8 +934,8 @@ if is_admin:
                     for _, row in plot_vendors.iterrows():
                         popup_content = build_vendor_popup_html(row, df_delivery, df_performance)
                         vid_str = row["clean_vid"]
-                        b_color_info = vendor_color_map.get(vid_str)
-                        pin_color = b_color_info.get("folium", "green") if b_color_info else "blue"
+                        b_color_info = vendor_color_map.get(vid_str, {})
+                        pin_color = b_color_info.get("folium", "blue")
                         is_single_focus = (len(selected_vendors) == 1 and vid_str in selected_vendors)
 
                         if is_single_focus:
@@ -926,7 +955,7 @@ if is_admin:
 
                 st_folium(m_admin, width="100%", height=620, key="admin_overview_map_folium", returned_objects=[])
             except Exception as e:
-                st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة التفصيلية: {e}")
+                st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
 # Tab 2: Vendor Portal (مع خيار تحديد كامل فروع السلسلة دفعة واحدة)
