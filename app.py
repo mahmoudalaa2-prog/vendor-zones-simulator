@@ -235,6 +235,7 @@ def load_data():
 
     df_p = read_google_sheet_csv(url_performance)
 
+    # 1. معالجة شيت الفيندورز
     if not df_v.empty:
         vid_col = robust_get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
         cid_col = robust_get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
@@ -286,6 +287,7 @@ def load_data():
 
         df_v = df_v[df_v["clean_vid"] != ""].copy()
 
+    # 2. معالجة شيت الأداء
     if not df_p.empty:
         p_vid_col = robust_get_col(df_p, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         p_cid_col = robust_get_col(df_p, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
@@ -305,6 +307,7 @@ def load_data():
         df_p["contact_rate"] = df_p[col_cr] if col_cr else "-"
         df_p["fault_cr"] = df_p[col_fault_cr] if col_fault_cr else "-"
 
+    # 3. معالجة شيت التوصيل
     if not df_d.empty and not df_v.empty:
         d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
@@ -324,6 +327,7 @@ def load_data():
         mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
         df_d = df_d[mask].copy()
 
+    # 4. معالجة شيت المناطق الجغرافية
     if not df_a.empty:
         poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
         if poly_col:
@@ -542,37 +546,49 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     html += "</div>"
     return html
 
-# دالة ذكية لاستخراج اسم المنطقة والنقر
+# دالة ذكية تلتقط دائماً المنطقة الأصغر والأكثر دقة عند التداخل
 def extract_clicked_zone_and_sig(mcd, pa_gdf, all_zones_list):
     clicked_zone = None
     click_sig = None
     if not mcd:
         return None, None
         
-    obj = mcd.get("last_object_clicked")
-    if obj and isinstance(obj, dict):
-        props = obj.get("properties") or {}
-        candidate = props.get("Delivery Location Area Name") or props.get("name")
-        if candidate and candidate in all_zones_list:
-            clicked_zone = candidate
-            click_sig = f"obj_{candidate}_{obj.get('lat')}_{obj.get('lng')}"
-            
-    if not clicked_zone:
-        click_pt_info = mcd.get("last_clicked") or obj
-        if click_pt_info and isinstance(click_pt_info, dict):
-            lat = click_pt_info.get("lat")
-            lng = click_pt_info.get("lng")
-            if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
-                pt = Point(lng, lat)
-                matching = pa_gdf[pa_gdf.geometry.contains(pt)]
-                if not matching.empty:
-                    clicked_zone = matching.iloc[0]["Delivery Location Area Name"]
-                    click_sig = f"geom_{clicked_zone}_{lat}_{lng}"
+    click_info = mcd.get("last_clicked") or mcd.get("last_object_clicked")
+    lat, lng = None, None
+    if click_info and isinstance(click_info, dict):
+        lat = click_info.get("lat")
+        lng = click_info.get("lng")
+        
+    # 1. إعطاء الأولوية القصوى للمنطقة الأصغر مساحة عند النقر داخل مناطق متداخلة
+    if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
+        pt = Point(lng, lat)
+        matching = pa_gdf[pa_gdf.geometry.contains(pt)]
+        if not matching.empty:
+            if "area_size" in matching.columns:
+                smallest = matching.sort_values(by="area_size", ascending=True).iloc[0]
+            else:
+                smallest = matching.iloc[0]
+            clicked_zone = smallest["Delivery Location Area Name"]
+            click_sig = f"pt_{clicked_zone}_{lat}_{lng}"
+        else:
+            matching_buf = pa_gdf[pa_gdf.geometry.distance(pt) < 0.0015]
+            if not matching_buf.empty:
+                if "area_size" in matching_buf.columns:
+                    smallest = matching_buf.sort_values(by="area_size", ascending=True).iloc[0]
                 else:
-                    matching_buf = pa_gdf[pa_gdf.geometry.distance(pt) < 0.0015]
-                    if not matching_buf.empty:
-                        clicked_zone = matching_buf.iloc[0]["Delivery Location Area Name"]
-                        click_sig = f"buf_{clicked_zone}_{lat}_{lng}"
+                    smallest = matching_buf.iloc[0]
+                clicked_zone = smallest["Delivery Location Area Name"]
+                click_sig = f"buf_{clicked_zone}_{lat}_{lng}"
+
+    # 2. خط الدفاع الثاني: استخراج اسم المضلع من خصائص الكائن المنقور
+    if not clicked_zone:
+        obj = mcd.get("last_object_clicked")
+        if obj and isinstance(obj, dict):
+            props = obj.get("properties") or {}
+            candidate = props.get("Delivery Location Area Name") or props.get("name")
+            if candidate and candidate in all_zones_list:
+                clicked_zone = candidate
+                click_sig = f"obj_{candidate}_{obj.get('lat')}_{obj.get('lng')}"
 
     if not click_sig and mcd.get("last_clicked"):
         lc = mcd["last_clicked"]
@@ -910,6 +926,8 @@ if is_admin:
                         gdf_areas_to_render = covered_gdf if not covered_gdf.empty else gdf_areas.head(80).copy()
 
                 if not gdf_areas_to_render.empty:
+                    # ترتيب المضلعات تنازلياً بحيث تُرسم الكبرى أولاً في الأسفل والصغرى في الواجهة
+                    gdf_areas_to_render = gdf_areas_to_render.sort_values(by="area_size", ascending=False)
                     def assign_zone_styling_and_popup(area_name):
                         z_clean = str(area_name).strip().lower()
                         if z_clean in zone_to_vendor_info:
@@ -1006,7 +1024,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التحديد المباشر بالنقر على الخريطة + القائمة بجوار الخريطة)
+# Tab 2: Vendor Portal (التحديد الدقيق للمناطق الصغرى + القائمة بجوار الخريطة)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1170,6 +1188,10 @@ with tab2:
             else:
                 pa = covered_gdf if not covered_gdf.empty else (gdf_areas.head(50).copy() if not gdf_areas.empty else gpd.GeoDataFrame())
 
+            # ترتيب المضلعات تنازلياً للمساحة حتى تُرسم الكبرى في الأسفل وتظهر الصغرى في الواجهة
+            if not pa.empty and "area_size" in pa.columns:
+                pa = pa.sort_values(by="area_size", ascending=False)
+
             zone_to_branch_owner = {}
             for v_id, z_dict in working_alloc.items():
                 for z in z_dict:
@@ -1261,7 +1283,7 @@ with tab2:
                     returned_objects=["last_object_clicked", "last_clicked"]
                 )
 
-                # التقاط النقر على المنطقة بدقة كاملة ومنع إعادة التشغيل اللانهائي
+                # التقاط النقر على المنطقة بدقة كاملة ومنع إعادة التشغيل اللانهائي مع تفضيل الصغرى
                 clicked_zone, click_sig = extract_clicked_zone_and_sig(mcd, pa, all_known_zones)
                 if click_sig and click_sig != st.session_state.get("last_poly_click_sig"):
                     st.session_state["last_poly_click_sig"] = click_sig
@@ -1594,6 +1616,7 @@ if is_admin:
                     raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                     raw_df["Action"] = raw_df.get("Action", "").astype(str)
 
+                    # فلاتر التصفية
                     f_c1, f_c2 = st.columns([1.5, 1.5])
                     with f_c1:
                         all_vn = [T("كل الفروع", "All Vendors")] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
@@ -1609,6 +1632,7 @@ if is_admin:
                     if f_vid != T("كل الأكواد", "All IDs"):
                         filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
 
+                    # تجميع الطلبات حسب كل إرسال (Vendor + Date)
                     summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
                         Total_Zones=("Zone", "count"),
                         Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط", case=False)).sum()),
@@ -1695,7 +1719,7 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع.", "📭 No incoming requests found."))
 
 # ==========================================
-# Tab 4: Users Management
+# Tab 4: Users Management (إدارة المستخدمين + تغيير كلمة المرور)
 # ==========================================
 if is_admin:
     with tab4:
@@ -1756,6 +1780,7 @@ if is_admin:
                     format_func=lambda x: T("مسؤول نظام (Admin)", "Admin") if x == "admin" else T("مستخدم فيندور (Vendor User)", "Vendor User")
                 )
                 
+                # تعديل كلمة المرور للمستخدم المحدد
                 edit_password_val = st.text_input(
                     T("🔑 كلمة المرور الجديدة (اتركه فارغاً للإبقاء على الحالية دون تغيير):", "🔑 New Password (leave blank to keep current):"),
                     type="password"
