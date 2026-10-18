@@ -18,6 +18,7 @@ from datetime import datetime
 # ==========================================
 st.set_page_config(layout="wide", page_title="Vendor & Zones Management", page_icon="🔒")
 
+# لوحة ألوان لتمييز فروع السلسلة الواحدة
 BRANCH_PALETTE = [
     {"hex": "#28a745", "folium": "green", "name": "أخضر"},
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
@@ -156,6 +157,7 @@ def load_data():
     df_a = read_google_sheet_csv(url_areas)
     df_d = read_google_sheet_csv(url_delivery)
 
+    # معالجة بيانات الفيندورز
     if not df_v.empty:
         vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
         cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
@@ -186,6 +188,7 @@ def load_data():
 
         df_v = df_v[df_v["clean_vid"] != ""].copy()
 
+    # معالجة بيانات التوصيل
     if not df_d.empty and not df_v.empty:
         d_vid_col = get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         d_cid_col = get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
@@ -205,6 +208,7 @@ def load_data():
         mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
         df_d = df_d[mask].copy()
 
+    # معالجة المناطق الجغرافية
     if not df_a.empty:
         poly_col = get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
         if poly_col:
@@ -279,6 +283,7 @@ def build_vendor_popup_html(v_row, df_delivery):
     c_name = v_row.get("clean_chain_name", "")
     v_city = v_row.get("clean_city", "")
 
+    # مطابقة مناطق الفرع فقط بدقة بناءً على Vendor ID
     match_d = pd.DataFrame()
     if not df_delivery.empty and "clean_vid" in df_delivery.columns:
         match_d = df_delivery[df_delivery["clean_vid"] == v_id]
@@ -376,7 +381,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (سريعة، دقيقة للفروع، تدعم الألوان المستقلة)
 # ==========================================
 if is_admin:
     with tab1:
@@ -437,6 +442,7 @@ if is_admin:
 
             plot_vendors = display_vendors.dropna(subset=["lat", "lng"]).copy()
 
+            # تخصيص لون فريد لكل فرع
             vendor_color_map = {}
             if selected_chain != "All Chains (كل السلاسل)":
                 chain_branches = chain_filtered_vendors[["clean_vid", "clean_name"]].drop_duplicates()
@@ -457,6 +463,7 @@ if is_admin:
                     "color_name": "أخضر"
                 }
 
+            # مطابقة مناطق التوصيل فقط للـ Vendor ID بدقة
             zone_to_vendor_info = {}
             if not df_delivery.empty and vendor_color_map:
                 relevant_vids = set(vendor_color_map.keys())
@@ -493,6 +500,7 @@ if is_admin:
                             unsafe_allow_html=True
                         )
 
+            # تجهيز مضلعات الخريطة
             if not gdf_areas.empty:
                 gdf_areas_plot = gdf_areas[["Delivery Location Area Name", "geometry"]].copy()
 
@@ -580,7 +588,7 @@ if is_admin:
             st_folium(m_admin, width="100%", height=620, key=f"admin_overview_map_{selected_city}_{selected_chain}_{selected_vendor}", returned_objects=[])
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (تحديد متعدد ثم Apply + جدول تفاعلي لتصنيف الإضافة وإلغاء التفعيل)
 # ==========================================
 with tab2:
     st.header("Vendor Portal - Coverage & Pricing Management")
@@ -656,6 +664,9 @@ with tab2:
             all_available_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
             zone_lookup = {z.strip().lower(): z for z in all_available_zones}
 
+            # -------------------------------------------------------------
+            # استرجاع مناطق التوصيل الحالية للفرع فقط
+            # -------------------------------------------------------------
             pre_filled_zones = []
             pre_filled_data = {}
             if not df_delivery.empty and "clean_vid" in df_delivery.columns:
@@ -663,6 +674,7 @@ with tab2:
                 d_time_col = get_col(df_delivery, ["Delivery Time", "Time", "Duration"])
                 d_fee_col = get_col(df_delivery, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
 
+                # حصر الاسترجاع على رقم الفرع فقط
                 my_del_df = df_delivery[df_delivery["clean_vid"] == v_id_clean]
 
                 if not my_del_df.empty and d_zone_col:
@@ -702,6 +714,7 @@ with tab2:
             st.markdown("---")
             col_map, col_form = st.columns([6, 4])
 
+            # ---------------- عمود الخريطة ----------------
             with col_map:
                 st.subheader(f"🗺️ Map ({len(current_applied)} Zones Applied)")
                 st.caption("💡 انقر على المناطق التي تريد إضافتها/إزالتها، ثم اضغط 'Apply to Map' بالأعلى لترقية الخريطة.")
@@ -733,6 +746,7 @@ with tab2:
                         tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=["انقر لتحديد المنطقة: "])
                     ).add_to(v_map)
 
+                # التقاط النقرة لتجميع المناطق دون تلوين الخريطة فوراً إلا بعد Apply
                 map_click_data = st_folium(
                     v_map,
                     width="100%",
@@ -773,6 +787,7 @@ with tab2:
 
                 btn_col1, btn_col2 = st.columns([1, 1])
                 with btn_col1:
+                    # زر Apply to Map يطبق التحديد ويغير ألوان الخريطة
                     if st.button("👁️ Apply to Map", type="secondary", use_container_width=True):
                         st.session_state["applied_zones"] = chosen_zones.copy()
                         st.session_state["ms_zones_input"] = chosen_zones.copy()
@@ -780,6 +795,7 @@ with tab2:
                         st.rerun()
                         
                 with btn_col2:
+                    # زر Submit Selection يطبق التحديد ويفتح جدول الأسعار والتصنيف
                     if st.button("🚀 Submit Selection", type="primary", use_container_width=True):
                         st.session_state["applied_zones"] = chosen_zones.copy()
                         st.session_state["ms_zones_input"] = chosen_zones.copy()
@@ -787,7 +803,7 @@ with tab2:
                         st.rerun()
 
             # ==========================================
-            # جدول التسعير وتصنيف المناطق
+            # جدول التسعير وتصنيف (المناطق الحالية / مناطق جديدة / إلغاء تفعيل)
             # ==========================================
             if st.session_state.get("show_pricing_table", False):
                 st.markdown("---")
@@ -797,6 +813,7 @@ with tab2:
                 original_registered = set(st.session_state.get("pre_filled_zones", []))
                 currently_chosen = set(st.session_state.get("applied_zones", []))
                 
+                # دمج: المناطق المختارة حالياً + أي منطقة قديمة تم حذفها لإتاحة خيار إلغاء التفعيل
                 all_relevant_zones = list(st.session_state.get("applied_zones", []))
                 for pz in st.session_state.get("pre_filled_zones", []):
                     if pz not in all_relevant_zones:
@@ -821,6 +838,7 @@ with tab2:
                         def_time = pre_data.get(zone, {}).get("time", "")
                         def_fee = pre_data.get(zone, {}).get("fees", None)
                         
+                        # تحديد التصنيف والإجراء الافتراضي
                         if is_existing and is_selected_now:
                             z_type = "📌 منطقة حالية مسجلة"
                             default_action = "نشط (Active)"
@@ -880,7 +898,7 @@ with tab2:
                         st.success(f"🎉 تم إرسال الطلب بنجاح! تم اعتماد ({len(active_items)}) منطقة نشطة و({len(edited_pricing_df) - len(active_items)}) منطقة ملغاة.")
 
 # ==========================================
-# Tab 3 & 4: Admin Sections (Incoming Requests)
+# Tab 3 & 4: Admin Sections (Incoming Requests & User Management)
 # ==========================================
 if is_admin:
     with tab3:
@@ -981,3 +999,27 @@ if is_admin:
                 
                 if st.form_submit_button("💾 إنشاء الحساب", type="primary"):
                     if not new_email or not new_password:
+                        st.error("يرجى ملء جميع الحقول المطلوبة.")
+                    elif u_role == "vendor" and not selected_access_ids_str:
+                        st.error("يرجى اختيار فرع أو سلسلة واحدة على الأقل.")
+                    else:
+                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+        with tab_u2:
+            users_list_df = get_users_df()
+            st.dataframe(users_list_df, use_container_width=True)
+            deletable = users_list_df[users_list_df["email"].str.lower() != "mahmoud.alaa.2@talabat.com"]["email"].tolist()
+            if deletable:
+                to_del = st.selectbox("اختر المستخدم للحذف:", deletable)
+                if st.button("حذف الحساب", type="secondary"):
+                    ok, msg = delete_user(to_del)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
