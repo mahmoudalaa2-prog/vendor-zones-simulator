@@ -142,7 +142,7 @@ def convert_to_csv_url(url):
     if m_id:
         sheet_id = m_id.group(1)
         gid = m_gid.group(1) if m_gid else "0"
-        return f"[https://docs.google.com/spreadsheets/d/](https://docs.google.com/spreadsheets/d/){sheet_id}/export?format=csv&gid={gid}"
+        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
     return url
 
 def read_google_sheet_csv(url):
@@ -153,6 +153,9 @@ def read_google_sheet_csv(url):
     try:
         res = requests.get(csv_url, headers=headers, timeout=15)
         if res.status_code == 200:
+            text_sample = res.text[:500].lower()
+            if "<!doctype" in text_sample or "<html" in text_sample or "google accounts" in text_sample:
+                return pd.DataFrame()
             return pd.read_csv(io.StringIO(res.text))
     except Exception:
         pass
@@ -166,14 +169,28 @@ def read_google_sheet_csv(url):
 # ==========================================
 @st.cache_data(ttl=1800)
 def load_data():
-    url_areas = "[https://docs.google.com/spreadsheets/d/1Y3AlqaHjp4nZup6QwOBgl6CT5z3XHjfzpRSx5Yw5byk/export?format=csv&gid=0](https://docs.google.com/spreadsheets/d/1Y3AlqaHjp4nZup6QwOBgl6CT5z3XHjfzpRSx5Yw5byk/export?format=csv&gid=0)"
-    url_vendors = "[https://docs.google.com/spreadsheets/d/12SSMW20Two2hRpHOuIXXifweJI82bZpJClhUAWSuYHk/export?format=csv&gid=0](https://docs.google.com/spreadsheets/d/12SSMW20Two2hRpHOuIXXifweJI82bZpJClhUAWSuYHk/export?format=csv&gid=0)"
-    url_delivery = "[https://docs.google.com/spreadsheets/d/1Gh6xnGNn7yx2g-bdIHC4DvHIMzVkOnh3Fdy6AhQtTmM/export?format=csv&gid=540443526](https://docs.google.com/spreadsheets/d/1Gh6xnGNn7yx2g-bdIHC4DvHIMzVkOnh3Fdy6AhQtTmM/export?format=csv&gid=540443526)"
+    url_areas = "https://docs.google.com/spreadsheets/d/1Y3AlqaHjp4nZup6QwOBgl6CT5z3XHjfzpRSx5Yw5byk/export?format=csv&gid=0"
+    url_vendors = "https://docs.google.com/spreadsheets/d/12SSMW20Two2hRpHOuIXXifweJI82bZpJClhUAWSuYHk/export?format=csv&gid=0"
+    url_delivery = "https://docs.google.com/spreadsheets/d/1Gh6xnGNn7yx2g-bdIHC4DvHIMzVkOnh3Fdy6AhQtTmM/export?format=csv&gid=540443526"
     
-    df_v = read_google_sheet_csv(url_vendors)
-    df_a = read_google_sheet_csv(url_areas)
-    df_d = read_google_sheet_csv(url_delivery)
+    # الروابط الاحتياطية المنشورة في حال كانت الشيتات الجديدة مغلقة
+    pub_url_areas = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSKMfgg92gyhtKgILJ_IMknkhC7HdjEnvUGu4ef09pEsQmndf2NtYIGlT9RavgA14zT38NMYNoI4OVt/pub?gid=298729660&single=true&output=csv"
+    pub_url_vendors = "https://docs.google.com/spreadsheets/d/e/2PACX-1vROpaDpyPadT9VreMa8FCxbBwvfzBxLjkEh8AtLyzQXgbVf3SAheyIjhYexiaVo8LLdjp58Z2DePKZ1/pub?gid=1243657258&single=true&output=csv"
+    pub_url_delivery = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR4BDgzbQgwjMgUIl9egw_OzUfT-2NZfQQqGmw6Xzk25NXC6F_8ZQk3JX6xIEkOUgAu7ZDqNe-FnzpY/pub?gid=29074284&single=true&output=csv"
 
+    df_v = read_google_sheet_csv(url_vendors)
+    if df_v.empty:
+        df_v = read_google_sheet_csv(pub_url_vendors)
+
+    df_a = read_google_sheet_csv(url_areas)
+    if df_a.empty:
+        df_a = read_google_sheet_csv(pub_url_areas)
+
+    df_d = read_google_sheet_csv(url_delivery)
+    if df_d.empty:
+        df_d = read_google_sheet_csv(pub_url_delivery)
+
+    # معالجة بيانات الفيندورز
     if not df_v.empty:
         vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
         cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
@@ -210,6 +227,7 @@ def load_data():
 
         df_v = df_v[df_v["clean_vid"] != ""].copy()
 
+    # معالجة بيانات التوصيل
     if not df_d.empty and not df_v.empty:
         d_vid_col = get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         d_cid_col = get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
@@ -229,6 +247,7 @@ def load_data():
         mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
         df_d = df_d[mask].copy()
 
+    # معالجة المناطق الجغرافية
     if not df_a.empty:
         poly_col = get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
         if poly_col:
@@ -268,7 +287,7 @@ df_vendors, gdf_areas, df_delivery = load_data()
 
 def get_user_vendors(user_dict, df_v):
     if df_v.empty:
-        return df_v
+        return pd.DataFrame(columns=["clean_vid", "clean_cid", "clean_name", "clean_chain_name", "clean_city", "clean_active", "clean_hidden", "lat", "lng"])
     access_type = user_dict.get("access_type", "all")
     access_ids_raw = str(user_dict.get("access_ids", "all")).split(",")
     allowed_ids = [normalize_id(x) for x in access_ids_raw if x.strip()]
@@ -312,7 +331,7 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
     save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
 
 def build_vendor_popup_html(v_row, df_delivery):
-    v_id = str(v_row["clean_vid"])
+    v_id = str(v_row.get("clean_vid", ""))
     c_id = str(v_row.get("clean_cid", ""))
     v_name = v_row.get("clean_name", "")
     c_name = v_row.get("clean_chain_name", "")
@@ -393,10 +412,10 @@ current_user = st.session_state["current_user"]
 is_admin = current_user["role"] == "admin"
 
 user_vendors = get_user_vendors(current_user, df_vendors)
-total_user_branches = len(user_vendors)
-active_user_branches = len(user_vendors[user_vendors["clean_active"] == "Yes"]) if not user_vendors.empty else 0
+total_user_branches = len(user_vendors) if not user_vendors.empty else 0
+active_user_branches = len(user_vendors[user_vendors["clean_active"] == "Yes"]) if (not user_vendors.empty and "clean_active" in user_vendors.columns) else 0
 inactive_user_branches = total_user_branches - active_user_branches
-hidden_user_branches = len(user_vendors[user_vendors["clean_hidden"] == "Yes"]) if not user_vendors.empty else 0
+hidden_user_branches = len(user_vendors[user_vendors["clean_hidden"] == "Yes"]) if (not user_vendors.empty and "clean_hidden" in user_vendors.columns) else 0
 
 with st.sidebar:
     st.write(f"👤 **المستخدم:** `{current_user['email']}`")
@@ -408,7 +427,7 @@ with st.sidebar:
     st.metric(
         label="🏬 الفروع التابعة لك",
         value=f"{total_user_branches}",
-        delta=f"🟢 {active_user_branches} فرع نشط (Active)"
+        delta=f"🟢 {active_user_branches} فرع نشط (Active)" if total_user_branches > 0 else "0 نشط"
     )
     st.caption(f"📊 تفاصيل فروعك: نشط: {active_user_branches} | غير نشط: {inactive_user_branches} | مخفي: {hidden_user_branches}")
     
@@ -428,13 +447,17 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
+# تنبيه في حال كانت الشيتات فارغة أو مغلقة
+if df_vendors.empty:
+    st.warning("⚠️ **تنبيه:** لم يتم تحميل بيانات الفيندورز من شيت Google Sheets. يرجى التأكد من ضبط إعدادات المشاركة للشيتات على **'Anyone with the link can view'**.")
+
 if is_admin:
     tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Overview Map", "🛒 Vendor Portal", "📥 Incoming Requests", "👥 Users"])
 else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (محمية بالكامل ضد أي بيانات فارغة)
 # ==========================================
 if is_admin:
     with tab1:
@@ -448,17 +471,27 @@ if is_admin:
             f_col1, f_col2, f_col3 = st.columns([1.5, 1.5, 1.8])
             
             with f_col1:
-                all_cities = ["All Cities"] + sorted([c for c in user_vendors["clean_city"].unique() if c])
+                if not user_vendors.empty and "clean_city" in user_vendors.columns:
+                    all_cities = ["All Cities"] + sorted([c for c in user_vendors["clean_city"].unique() if c])
+                else:
+                    all_cities = ["All Cities"]
                 selected_city = st.selectbox("1. المدينة / المحافظة:", options=all_cities, key="admin_map_city")
 
-            city_df = user_vendors if selected_city == "All Cities" else user_vendors[user_vendors["clean_city"] == selected_city]
+            if not user_vendors.empty and "clean_city" in user_vendors.columns and selected_city != "All Cities":
+                city_df = user_vendors[user_vendors["clean_city"] == selected_city]
+            else:
+                city_df = user_vendors.copy() if not user_vendors.empty else pd.DataFrame()
 
             with f_col2:
-                chains_in_city = city_df[["clean_cid", "clean_chain_name"]].drop_duplicates()
-                chains_in_city = chains_in_city[chains_in_city["clean_cid"] != ""]
-                chain_map = dict(zip(chains_in_city["clean_cid"], chains_in_city["clean_chain_name"] + " (" + chains_in_city["clean_cid"] + ")"))
-                chain_options = ["All Chains (كل السلاسل)"] + list(chain_map.keys())
-                
+                if not city_df.empty and "clean_cid" in city_df.columns and "clean_chain_name" in city_df.columns:
+                    chains_in_city = city_df[["clean_cid", "clean_chain_name"]].drop_duplicates()
+                    chains_in_city = chains_in_city[chains_in_city["clean_cid"] != ""]
+                    chain_map = dict(zip(chains_in_city["clean_cid"], chains_in_city["clean_chain_name"] + " (" + chains_in_city["clean_cid"] + ")"))
+                    chain_options = ["All Chains (كل السلاسل)"] + list(chain_map.keys())
+                else:
+                    chain_map = {}
+                    chain_options = ["All Chains (كل السلاسل)"]
+                    
                 selected_chain = st.selectbox(
                     "2. السلسلة (Chain):",
                     options=chain_options,
@@ -466,15 +499,22 @@ if is_admin:
                     key="admin_map_chain"
                 )
 
-            chain_filtered_vendors = city_df if selected_chain == "All Chains (كل السلاسل)" else city_df[city_df["clean_cid"] == selected_chain]
+            if not city_df.empty and "clean_cid" in city_df.columns and selected_chain != "All Chains (كل السلاسل)":
+                chain_filtered_vendors = city_df[city_df["clean_cid"] == selected_chain]
+            else:
+                chain_filtered_vendors = city_df.copy()
 
             with f_col3:
-                vendor_opts = dict(zip(
-                    chain_filtered_vendors["clean_vid"],
-                    chain_filtered_vendors["clean_name"] + " (ID: " + chain_filtered_vendors["clean_vid"] + ")"
-                ))
-                vendor_options = ["All Vendors (كل الفروع)"] + list(vendor_opts.keys())
-                
+                if not chain_filtered_vendors.empty and "clean_vid" in chain_filtered_vendors.columns and "clean_name" in chain_filtered_vendors.columns:
+                    vendor_opts = dict(zip(
+                        chain_filtered_vendors["clean_vid"],
+                        chain_filtered_vendors["clean_name"] + " (ID: " + chain_filtered_vendors["clean_vid"] + ")"
+                    ))
+                    vendor_options = ["All Vendors (كل الفروع)"] + list(vendor_opts.keys())
+                else:
+                    vendor_opts = {}
+                    vendor_options = ["All Vendors (كل الفروع)"]
+                    
                 selected_vendor = st.selectbox(
                     "3. الفرع (Vendor):",
                     options=vendor_options,
@@ -502,29 +542,39 @@ if is_admin:
                     st.rerun()
 
             display_vendors = chain_filtered_vendors.copy()
-            if selected_vendor != "All Vendors (كل الفروع)":
+            if not display_vendors.empty and "clean_vid" in display_vendors.columns and selected_vendor != "All Vendors (كل الفروع)":
                 display_vendors = display_vendors[display_vendors["clean_vid"] == selected_vendor]
                 
-            if selected_active == "Active Only (نشط فقط - Yes)":
-                display_vendors = display_vendors[display_vendors["clean_active"] == "Yes"]
-            elif selected_active == "Inactive Only (غير نشط - No)":
-                display_vendors = display_vendors[display_vendors["clean_active"] == "No"]
-                
-            if selected_hidden == "Visible Only (الظاهر فقط - No)":
-                display_vendors = display_vendors[display_vendors["clean_hidden"] == "No"]
-            elif selected_hidden == "Hidden Only (المخفي فقط - Yes)":
-                display_vendors = display_vendors[display_vendors["clean_hidden"] == "Yes"]
+            if not display_vendors.empty and "clean_active" in display_vendors.columns:
+                if selected_active == "Active Only (نشط فقط - Yes)":
+                    display_vendors = display_vendors[display_vendors["clean_active"] == "Yes"]
+                elif selected_active == "Inactive Only (غير نشط - No)":
+                    display_vendors = display_vendors[display_vendors["clean_active"] == "No"]
+                    
+            if not display_vendors.empty and "clean_hidden" in display_vendors.columns:
+                if selected_hidden == "Visible Only (الظاهر فقط - No)":
+                    display_vendors = display_vendors[display_vendors["clean_hidden"] == "No"]
+                elif selected_hidden == "Hidden Only (المخفي فقط - Yes)":
+                    display_vendors = display_vendors[display_vendors["clean_hidden"] == "Yes"]
 
-            plot_vendors = display_vendors.dropna(subset=["lat", "lng"]).copy()
+            if not display_vendors.empty and "lat" in display_vendors.columns and "lng" in display_vendors.columns:
+                plot_vendors = display_vendors.dropna(subset=["lat", "lng"]).copy()
+            else:
+                plot_vendors = pd.DataFrame()
+
+            cnt_total = len(display_vendors)
+            cnt_active = len(display_vendors[display_vendors["clean_active"] == "Yes"]) if ("clean_active" in display_vendors.columns and not display_vendors.empty) else 0
+            cnt_inactive = cnt_total - cnt_active
+            cnt_hidden = len(display_vendors[display_vendors["clean_hidden"] == "Yes"]) if ("clean_hidden" in display_vendors.columns and not display_vendors.empty) else 0
 
             card_col1, card_col2, card_col3, card_col4 = st.columns(4)
-            card_col1.metric("الفروع المعروضة", len(display_vendors))
-            card_col2.metric("🟢 النشطة (Active)", len(display_vendors[display_vendors["clean_active"] == "Yes"]))
-            card_col3.metric("🔴 غير النشطة (Inactive)", len(display_vendors[display_vendors["clean_active"] == "No"]))
-            card_col4.metric("👁️ المخفية (Hidden)", len(display_vendors[display_vendors["clean_hidden"] == "Yes"]))
+            card_col1.metric("الفروع المعروضة", cnt_total)
+            card_col2.metric("🟢 النشطة (Active)", cnt_active)
+            card_col3.metric("🔴 غير النشطة (Inactive)", cnt_inactive)
+            card_col4.metric("👁️ المخفية (Hidden)", cnt_hidden)
 
             vendor_color_map = {}
-            if selected_chain != "All Chains (كل السلاسل)":
+            if not chain_filtered_vendors.empty and selected_chain != "All Chains (كل السلاسل)":
                 chain_branches = chain_filtered_vendors[["clean_vid", "clean_name"]].drop_duplicates()
                 for idx, (_, b_row) in enumerate(chain_branches.iterrows()):
                     pal_entry = BRANCH_PALETTE[idx % len(BRANCH_PALETTE)]
@@ -534,7 +584,7 @@ if is_admin:
                         "folium": pal_entry["folium"],
                         "color_name": pal_entry["name"]
                     }
-            elif selected_vendor != "All Vendors (كل الفروع)":
+            elif not display_vendors.empty and selected_vendor != "All Vendors (كل الفروع)":
                 v_name_sel = display_vendors.iloc[0]["clean_name"]
                 vendor_color_map[selected_vendor] = {
                     "name": v_name_sel,
@@ -682,7 +732,10 @@ with tab2:
 
         if vendor_input_raw:
             clean_search = normalize_id(vendor_input_raw)
-            match_vid = user_vendors[user_vendors["clean_vid"] == clean_search]
+            if not user_vendors.empty and "clean_vid" in user_vendors.columns:
+                match_vid = user_vendors[user_vendors["clean_vid"] == clean_search]
+            else:
+                match_vid = pd.DataFrame()
             
             if not match_vid.empty:
                 target_vid = clean_search
@@ -692,10 +745,13 @@ with tab2:
         allowed_raw = str(current_user["access_ids"]).split(",")
         allowed_ids = [normalize_id(x) for x in allowed_raw if x.strip()]
         
-        if current_user["access_type"] == "Chain ID":
-            permitted_vendors = user_vendors[user_vendors["clean_cid"].isin(allowed_ids)]
+        if not user_vendors.empty:
+            if current_user["access_type"] == "Chain ID":
+                permitted_vendors = user_vendors[user_vendors["clean_cid"].isin(allowed_ids)]
+            else:
+                permitted_vendors = user_vendors[user_vendors["clean_vid"].isin(allowed_ids)]
         else:
-            permitted_vendors = user_vendors[user_vendors["clean_vid"].isin(allowed_ids)]
+            permitted_vendors = pd.DataFrame()
             
         if permitted_vendors.empty:
             st.warning("⚠️ لا توجد فروع أو فيندورز مربوطة بحسابك حتى الآن. يرجى مراجعة إدارة النظام.")
@@ -710,7 +766,7 @@ with tab2:
                 format_func=lambda x: options_dict[x]
             )
 
-    if target_vid:
+    if target_vid and not user_vendors.empty:
         v_id_clean = normalize_id(target_vid)
         vendor_data = user_vendors[user_vendors["clean_vid"] == v_id_clean]
         
@@ -1044,18 +1100,24 @@ if is_admin:
                 access_type, selected_access_ids_str = "all", "all"
                 if access_choice == "سلاسل محددة (Chain ID)":
                     access_type = "Chain ID"
-                    chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
-                    chains_df = chains_df[chains_df["clean_cid"] != ""]
-                    chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
-                    chosen_chains = st.multiselect("اختر السلاسل التابعة له:", options=list(chain_opts.keys()), format_func=lambda x: chain_opts[x])
-                    selected_access_ids_str = ", ".join(chosen_chains)
+                    if not df_vendors.empty and "clean_cid" in df_vendors.columns:
+                        chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
+                        chains_df = chains_df[chains_df["clean_cid"] != ""]
+                        chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
+                        chosen_chains = st.multiselect("اختر السلاسل التابعة له:", options=list(chain_opts.keys()), format_func=lambda x: chain_opts[x])
+                        selected_access_ids_str = ", ".join(chosen_chains)
+                    else:
+                        selected_access_ids_str = ""
                 elif access_choice == "فروع محددة (Vendor ID)":
                     access_type = "Vendor ID"
-                    vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
-                    vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
-                    vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
-                    chosen_vendors = st.multiselect("اختر الفروع التابعة له:", options=list(vendor_opts.keys()), format_func=lambda x: vendor_opts[x])
-                    selected_access_ids_str = ", ".join(chosen_vendors)
+                    if not df_vendors.empty and "clean_vid" in df_vendors.columns:
+                        vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
+                        vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
+                        vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
+                        chosen_vendors = st.multiselect("اختر الفروع التابعة له:", options=list(vendor_opts.keys()), format_func=lambda x: vendor_opts[x])
+                        selected_access_ids_str = ", ".join(chosen_vendors)
+                    else:
+                        selected_access_ids_str = ""
                 
                 if st.form_submit_button("💾 إنشاء الحساب", type="primary"):
                     if not new_email or not new_password:
@@ -1096,20 +1158,26 @@ if is_admin:
                 e_access_type, e_selected_access_ids_str = "all", "all"
                 if e_access_choice == "سلاسل محددة (Chain ID)":
                     e_access_type = "Chain ID"
-                    chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
-                    chains_df = chains_df[chains_df["clean_cid"] != ""]
-                    chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
-                    curr_ids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in chain_opts]
-                    chosen_chains = st.multiselect("اختر السلاسل التابعة له:", options=list(chain_opts.keys()), default=curr_ids, format_func=lambda x: chain_opts[x])
-                    e_selected_access_ids_str = ", ".join(chosen_chains)
+                    if not df_vendors.empty and "clean_cid" in df_vendors.columns:
+                        chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
+                        chains_df = chains_df[chains_df["clean_cid"] != ""]
+                        chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
+                        curr_ids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in chain_opts]
+                        chosen_chains = st.multiselect("اختر السلاسل التابعة له:", options=list(chain_opts.keys()), default=curr_ids, format_func=lambda x: chain_opts[x])
+                        e_selected_access_ids_str = ", ".join(chosen_chains)
+                    else:
+                        e_selected_access_ids_str = ""
                 elif e_access_choice == "فروع محددة (Vendor ID)":
                     e_access_type = "Vendor ID"
-                    vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
-                    vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
-                    vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
-                    curr_vids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in vendor_opts]
-                    chosen_vendors = st.multiselect("اختر الفروع التابعة له:", options=list(vendor_opts.keys()), default=curr_vids, format_func=lambda x: vendor_opts[x])
-                    e_selected_access_ids_str = ", ".join(chosen_vendors)
+                    if not df_vendors.empty and "clean_vid" in df_vendors.columns:
+                        vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
+                        vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
+                        vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
+                        curr_vids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in vendor_opts]
+                        chosen_vendors = st.multiselect("اختر الفروع التابعة له:", options=list(vendor_opts.keys()), default=curr_vids, format_func=lambda x: vendor_opts[x])
+                        e_selected_access_ids_str = ", ".join(chosen_vendors)
+                    else:
+                        e_selected_access_ids_str = ""
                     
                 if st.form_submit_button("💾 حفظ التعديلات وتحديث الصلاحيات", type="primary"):
                     ok, msg, updated_row = update_user_permissions(selected_edit_user, e_role, e_access_type, e_selected_access_ids_str)
