@@ -235,7 +235,6 @@ def load_data():
 
     df_p = read_google_sheet_csv(url_performance)
 
-    # 1. معالجة شيت الفيندورز
     if not df_v.empty:
         vid_col = robust_get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
         cid_col = robust_get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
@@ -287,7 +286,6 @@ def load_data():
 
         df_v = df_v[df_v["clean_vid"] != ""].copy()
 
-    # 2. معالجة شيت الأداء
     if not df_p.empty:
         p_vid_col = robust_get_col(df_p, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         p_cid_col = robust_get_col(df_p, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
@@ -307,7 +305,6 @@ def load_data():
         df_p["contact_rate"] = df_p[col_cr] if col_cr else "-"
         df_p["fault_cr"] = df_p[col_fault_cr] if col_fault_cr else "-"
 
-    # 3. معالجة شيت التوصيل
     if not df_d.empty and not df_v.empty:
         d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
         d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
@@ -327,7 +324,6 @@ def load_data():
         mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
         df_d = df_d[mask].copy()
 
-    # 4. معالجة شيت المناطق الجغرافية
     if not df_a.empty:
         poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
         if poly_col:
@@ -348,6 +344,7 @@ def load_data():
                 mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
                 gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
                 
+            # ترتيب المضلعات تنازلياً للمساحة حتى تُرسم الكبرى أولاً في الخلفية والصغرى في الواجهة
             gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
             centroids = gdf_a.geometry.centroid
             gdf_a["centroid_lat"] = centroids.y
@@ -546,55 +543,33 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     html += "</div>"
     return html
 
-# دالة ذكية تلتقط دائماً المنطقة الأصغر والأكثر دقة عند التداخل
-def extract_clicked_zone_and_sig(mcd, pa_gdf, all_zones_list):
-    clicked_zone = None
-    click_sig = None
+# الدالة الفورية لالتقاط نقرة المضلع من أول مرة دون أي تضارب
+def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     if not mcd:
         return None, None
         
-    click_info = mcd.get("last_clicked") or mcd.get("last_object_clicked")
-    lat, lng = None, None
-    if click_info and isinstance(click_info, dict):
-        lat = click_info.get("lat")
-        lng = click_info.get("lng")
-        
-    # 1. إعطاء الأولوية القصوى للمنطقة الأصغر مساحة عند النقر داخل مناطق متداخلة
-    if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
-        pt = Point(lng, lat)
-        matching = pa_gdf[pa_gdf.geometry.contains(pt)]
-        if not matching.empty:
-            if "area_size" in matching.columns:
-                smallest = matching.sort_values(by="area_size", ascending=True).iloc[0]
-            else:
-                smallest = matching.iloc[0]
-            clicked_zone = smallest["Delivery Location Area Name"]
-            click_sig = f"pt_{clicked_zone}_{lat}_{lng}"
-        else:
-            matching_buf = pa_gdf[pa_gdf.geometry.distance(pt) < 0.0015]
-            if not matching_buf.empty:
-                if "area_size" in matching_buf.columns:
-                    smallest = matching_buf.sort_values(by="area_size", ascending=True).iloc[0]
-                else:
-                    smallest = matching_buf.iloc[0]
-                clicked_zone = smallest["Delivery Location Area Name"]
-                click_sig = f"buf_{clicked_zone}_{lat}_{lng}"
+    # 1. القراءة المباشرة من خصائص المضلع المنقور بالماوس (الأسرع والأدق من أول كليك)
+    obj = mcd.get("last_object_clicked")
+    if obj and isinstance(obj, dict):
+        props = obj.get("properties") or {}
+        poly_name = props.get("Delivery Location Area Name") or props.get("name")
+        if poly_name and poly_name in all_zones_list:
+            sig = f"obj_{poly_name}_{obj.get('lat')}_{obj.get('lng')}"
+            return poly_name, sig
 
-    # 2. خط الدفاع الثاني: استخراج اسم المضلع من خصائص الكائن المنقور
-    if not clicked_zone:
-        obj = mcd.get("last_object_clicked")
-        if obj and isinstance(obj, dict):
-            props = obj.get("properties") or {}
-            candidate = props.get("Delivery Location Area Name") or props.get("name")
-            if candidate and candidate in all_zones_list:
-                clicked_zone = candidate
-                click_sig = f"obj_{candidate}_{obj.get('lat')}_{obj.get('lng')}"
+    # 2. فحص النقطة جغرافياً (Point-in-polygon) باختيار المضلع الأصغر مساحة إذا لزم الأمر
+    if obj and isinstance(obj, dict):
+        lat, lng = obj.get("lat"), obj.get("lng")
+        if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
+            pt = Point(lng, lat)
+            matching = pa_gdf[pa_gdf.geometry.contains(pt)]
+            if not matching.empty:
+                smallest = matching.sort_values(by="area_size", ascending=True).iloc[0] if "area_size" in matching.columns else matching.iloc[0]
+                poly_name = smallest["Delivery Location Area Name"]
+                sig = f"pt_{poly_name}_{lat}_{lng}"
+                return poly_name, sig
 
-    if not click_sig and mcd.get("last_clicked"):
-        lc = mcd["last_clicked"]
-        click_sig = f"raw_{lc.get('lat')}_{lc.get('lng')}"
-        
-    return clicked_zone, click_sig
+    return None, None
 
 # ==========================================
 # 5. شاشة تسجيل الدخول
@@ -926,7 +901,6 @@ if is_admin:
                         gdf_areas_to_render = covered_gdf if not covered_gdf.empty else gdf_areas.head(80).copy()
 
                 if not gdf_areas_to_render.empty:
-                    # ترتيب المضلعات تنازلياً بحيث تُرسم الكبرى أولاً في الأسفل والصغرى في الواجهة
                     gdf_areas_to_render = gdf_areas_to_render.sort_values(by="area_size", ascending=False)
                     def assign_zone_styling_and_popup(area_name):
                         z_clean = str(area_name).strip().lower()
@@ -1024,7 +998,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التحديد الدقيق للمناطق الصغرى + القائمة بجوار الخريطة)
+# Tab 2: Vendor Portal (التحديد الفوري من أول نقرة دون أي تأخير)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1275,16 +1249,17 @@ with tab2:
                         )
                     ).add_to(vmap)
 
+                # حصر الإرجاع في كائن المضلع المنقور بدقة لتجنب تضارب الإحداثيات القديمة
                 mcd = st_folium(
                     vmap,
                     width="100%",
                     height=540,
                     key=f"vmap_portal_{portal_session_key}_{active_vid}_{rad}",
-                    returned_objects=["last_object_clicked", "last_clicked"]
+                    returned_objects=["last_object_clicked"]
                 )
 
-                # التقاط النقر على المنطقة بدقة كاملة ومنع إعادة التشغيل اللانهائي مع تفضيل الصغرى
-                clicked_zone, click_sig = extract_clicked_zone_and_sig(mcd, pa, all_known_zones)
+                # الالتقاط المباشر من خصائص المضلع من أول كليك
+                clicked_zone, click_sig = extract_clicked_zone_direct(mcd, pa, all_known_zones)
                 if click_sig and click_sig != st.session_state.get("last_poly_click_sig"):
                     st.session_state["last_poly_click_sig"] = click_sig
                     if clicked_zone:
@@ -1336,7 +1311,7 @@ with tab2:
                 active_zones_keys = sorted(list(active_branch_zones.keys()))
                 available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
 
-                # مزامنة النقرة من الخريطة مباشرة في قائمة الاختيار المطلوبة
+                # مزامنة النقرة من الخريطة مباشرة في قائمة الاختيار المطلوبة من أول كليك
                 just_clicked = st.session_state.pop("just_clicked_map_zone", None)
                 if just_clicked:
                     if "تعديل" in action_mode or "Edit" in action_mode:
