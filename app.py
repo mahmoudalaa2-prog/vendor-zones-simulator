@@ -18,7 +18,7 @@ from datetime import datetime
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
-# تقليص أحجام الأرقام وتنسيق مربعات الاختيار في القوائم المنسدلة
+# تقليص وتنسيق حجم أرقام الـ Metrics وضبط النوافذ المنبثقة
 st.markdown("""
 <style>
 div[data-testid="stMetricValue"] {
@@ -30,19 +30,6 @@ div[data-testid="stMetricLabel"] {
 }
 div[data-testid="stMetricDelta"] {
     font-size: 12px !important;
-}
-
-/* تنسيق مربعات الاختيار لجميع عناصر القوائم المنسدلة */
-div[data-baseweb="popover"] [role="option"],
-div[data-baseweb="menu"] [role="option"],
-div[data-testid="stVirtualDropdown"] [role="option"],
-[role="listbox"] [role="option"],
-[role="option"] {
-    display: flex !important;
-    align-items: center !important;
-    padding: 6px 10px !important;
-    cursor: pointer !important;
-    font-size: 13.5px !important;
 }
 
 /* ضبط حجم النوافذ المنبثقة على الخريطة لتكون مدمجة وتدعم Swipe Down */
@@ -669,7 +656,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (فلاتر Checklists مربعات + نافذة مدمجة وSwipe Down)
+# Tab 1: Admin Map (فلاتر Multiselect ثابتة ومستقرة + شبكة المناطق الكاملة)
 # ==========================================
 if is_admin:
     with tab1:
@@ -683,19 +670,20 @@ if is_admin:
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
-            # الفلاتر الأربعة بنظام مربعات الاختيار التفاعلية (Checklists)
+            # الفلاتر الأربعة بنظام القوائم متعددة الاختيار الطبيعية المستقرة
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.4, 1.4, 1.2])
             
             with f_col1:
                 if not user_vendors.empty and "clean_city" in user_vendors.columns:
                     all_cities = sorted([c for c in user_vendors["clean_city"].dropna().unique() if c and c != "-"])
                 else: all_cities = []
-                cur_cities = st.session_state.get("admin_map_cities", [])
+                
+                if "admin_map_cities" in st.session_state:
+                    st.session_state["admin_map_cities"] = [c for c in st.session_state["admin_map_cities"] if c in all_cities]
+
                 selected_cities = st.multiselect(
                     T("1. المدينة / المحافظة:", "1. City:"),
                     options=all_cities,
-                    format_func=lambda x: f"☑ {x}" if x in cur_cities else f"☐ {x}",
-                    default=[],
                     placeholder=T("الكل (أو اختر مدن)", "All (or select cities)"),
                     key="admin_map_cities"
                 )
@@ -706,12 +694,13 @@ if is_admin:
                 if not city_subset.empty and "clean_am" in city_subset.columns:
                     valid_ams = sorted([a for a in city_subset["clean_am"].dropna().unique() if is_valid_am_name(a)])
                 else: valid_ams = []
-                cur_ams = st.session_state.get("admin_map_ams", [])
+                
+                if "admin_map_ams" in st.session_state:
+                    st.session_state["admin_map_ams"] = [a for a in st.session_state["admin_map_ams"] if a in valid_ams]
+
                 selected_ams = st.multiselect(
                     T("2. مسؤول الحساب (AM):", "2. Account Manager (AM):"),
                     options=valid_ams,
-                    format_func=lambda x: f"☑ {x}" if x in cur_ams else f"☐ {x}",
-                    default=[],
                     placeholder=T("الكل (أو اختر AMs)", "All (or select AMs)"),
                     key="admin_map_ams"
                 )
@@ -728,12 +717,13 @@ if is_admin:
                     chain_map = {}
                     chain_options = []
                     
-                cur_chains = st.session_state.get("admin_map_chains", [])
+                if "admin_map_chains" in st.session_state:
+                    st.session_state["admin_map_chains"] = [c for c in st.session_state["admin_map_chains"] if c in chain_options]
+
                 selected_chains = st.multiselect(
                     T("3. السلسلة (Chain):", "3. Chain:"),
                     options=chain_options,
-                    format_func=lambda x: f"☑ {chain_map.get(x, x)}" if x in cur_chains else f"☐ {chain_map.get(x, x)}",
-                    default=[],
+                    format_func=lambda x: chain_map.get(x, x),
                     placeholder=T("الكل (أو اختر سلاسل)", "All (or select chains)"),
                     key="admin_map_chains"
                 )
@@ -751,12 +741,13 @@ if is_admin:
                     vendor_opts = {}
                     vendor_options = []
                     
-                cur_vendors = st.session_state.get("admin_map_vendors", [])
+                if "admin_map_vendors" in st.session_state:
+                    st.session_state["admin_map_vendors"] = [v for v in st.session_state["admin_map_vendors"] if v in vendor_options]
+
                 selected_vendors = st.multiselect(
                     T("4. الفرع (Vendor):", "4. Vendor:"),
                     options=vendor_options,
-                    format_func=lambda x: f"☑ {vendor_opts.get(x, x)}" if x in cur_vendors else f"☐ {vendor_opts.get(x, x)}",
-                    default=[],
+                    format_func=lambda x: vendor_opts.get(x, x),
                     placeholder=T("الكل (أو اختر فروع)", "All (or select vendors)"),
                     key="admin_map_vendors"
                 )
@@ -935,8 +926,15 @@ if is_admin:
                     zoom_lvl = 7
 
                 m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
-                css_style = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;} path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}</style>"
-                m_admin.get_root().html.add_child(folium.Element(css_style))
+                
+                # إضافة ستايل الخريطة بشكل آمن ومغلق
+                map_custom_css = (
+                    "<style>"
+                    ".leaflet-interactive:focus {outline: none !important;}"
+                    "path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}"
+                    "</style>"
+                )
+                m_admin.get_root().html.add_child(folium.Element(map_custom_css))
 
                 # رسم مضلعات المناطق كاملة
                 if not gdf_areas_to_render.empty:
