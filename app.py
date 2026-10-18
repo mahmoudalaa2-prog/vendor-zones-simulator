@@ -14,9 +14,25 @@ import requests
 from datetime import datetime
 
 # ==========================================
-# 1. إعدادات الصفحة واللغة
+# 1. إعدادات الصفحة والتصميم واللغة
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
+
+# تقليص حجم أرقام الـ Metrics لتصبح مدمجة وأنيقة
+st.markdown("""
+<style>
+div[data-testid="stMetricValue"] {
+    font-size: 21px !important;
+    font-weight: 700 !important;
+}
+div[data-testid="stMetricLabel"] {
+    font-size: 13px !important;
+}
+div[data-testid="stMetricDelta"] {
+    font-size: 12px !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 if "lang" not in st.session_state:
     st.session_state["lang"] = "ar"
@@ -29,11 +45,11 @@ BRANCH_PALETTE = [
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
     {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
-    {"hex": "#8540f5", "darkpurple": "darkpurple", "name": "أرجواني"},
+    {"hex": "#8540f5", "folium": "darkpurple", "name": "أرجواني"},
     {"hex": "#a52a2a", "folium": "darkred", "name": "بني"}
 ]
 
@@ -102,8 +118,12 @@ def normalize_id(val):
     return re.sub(r"\.0+$", "", s)
 
 def parse_yes_no(val, default="Yes"):
-    if pd.isna(val) or str(val).strip().lower() in ["", "none", "nan", "null"]: return default
-    return "Yes" if str(val).strip().lower() in ["yes", "y", "true", "1"] else "No"
+    if pd.isna(val): return default
+    s = str(val).strip().lower()
+    if s in ["", "none", "nan", "null"]: return default
+    if s in ["yes", "y", "true", "1", "نعم", "نشط", "مفعل"]: return "Yes"
+    if s in ["no", "n", "false", "0", "لا", "غير نشط", "معطل"]: return "No"
+    return default
 
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str): return None
@@ -117,15 +137,28 @@ def haversine_km(lat1, lon1, lat2, lon2):
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R * c
 
-def get_col(df, possible_names):
-    if df.empty: return None
+def robust_get_col(df, possible_names):
+    if len(df.columns) == 0: return None
+    # 1. مطابقة مباشرة
     for name in possible_names:
         for col in df.columns:
-            if str(name).strip().lower() == str(col).strip().lower(): return col
+            if str(name).strip().lower() == str(col).strip().lower():
+                return col
+    # 2. مطابقة مع تنظيف الرموز
     for name in possible_names:
-        name_clean = re.sub(r'[^a-zA-Z0-9]', '', str(name)).lower()
+        name_clean = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF]', '', str(name)).lower()
         for col in df.columns:
-            if name_clean == re.sub(r'[^a-zA-Z0-9]', '', str(col)).lower(): return col
+            col_clean = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF]', '', str(col)).lower()
+            if name_clean == col_clean:
+                return col
+    # 3. مطابقة بالاحتواء الجزئي
+    for name in possible_names:
+        name_clean = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF]', '', str(name)).lower()
+        if len(name_clean) >= 2:
+            for col in df.columns:
+                col_clean = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF]', '', str(col)).lower()
+                if name_clean in col_clean or col_clean in name_clean:
+                    return col
     return None
 
 def convert_to_csv_url(url):
@@ -155,7 +188,7 @@ def read_google_sheet_csv(url):
     except Exception: return pd.DataFrame()
 
 # ==========================================
-# 4. جلب وتجهيز البيانات (بما فيها شيت الأداء)
+# 4. جلب وتجهيز البيانات
 # ==========================================
 @st.cache_data(ttl=1800)
 def load_data():
@@ -181,29 +214,29 @@ def load_data():
 
     # 1. شيت الفيندورز
     if not df_v.empty:
-        vid_col = get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
-        cid_col = get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
-        name_col = get_col(df_v, ["Vendor Attributes Vendor Name (English)", "Vendor Name", "Name", "vendor_name"])
-        cname_col = get_col(df_v, ["Chain Attributes Chain Name", "Chain Name", "chain_name"])
-        city_col = get_col(df_v, ["Vendor Attributes Vendor City", "City", "Vendor City"])
-        am_col = get_col(df_v, ["Vendor Attributes Account Manager", "Account Manager", "AM", "AccountManager", "account_manager"])
+        vid_col = robust_get_col(df_v, ["Vendor Attributes Vendor Id", "Vendor Id", "Vendor ID", "VendorID", "vendor_id"])
+        cid_col = robust_get_col(df_v, ["Chain Attributes Chain ID", "Chain Id", "Chain ID", "ChainID", "chain_id"])
+        name_col = robust_get_col(df_v, ["Vendor Attributes Vendor Name (English)", "Vendor Name", "Name", "vendor_name"])
+        cname_col = robust_get_col(df_v, ["Chain Attributes Chain Name", "Chain Name", "chain_name"])
+        city_col = robust_get_col(df_v, ["Vendor Attributes Vendor City", "City", "Vendor City"])
+        am_col = robust_get_col(df_v, ["Vendor Attributes Account Manager", "Account Manager", "AM", "AccountManager", "account_manager", "مسؤول الحساب", "مدير الحساب", "المسؤول"])
 
-        active_col = get_col(df_v, ["Vendor Attributes Is Active", "Is Active", "Active", "IsActive", "is_active"])
-        hidden_col = get_col(df_v, ["Vendor Attributes Is Hidden", "Is Hidden", "Hidden", "IsHidden", "is_hidden"])
+        active_col = robust_get_col(df_v, ["Vendor Attributes Is Active", "Is Active", "Active", "IsActive", "is_active", "نشط"])
+        hidden_col = robust_get_col(df_v, ["Vendor Attributes Is Hidden", "Is Hidden", "Hidden", "IsHidden", "is_hidden", "مخفي"])
 
         df_v["clean_vid"] = df_v[vid_col].apply(normalize_id) if vid_col else ""
         df_v["clean_cid"] = df_v[cid_col].apply(normalize_id) if cid_col else ""
         df_v["clean_name"] = df_v[name_col].astype(str).str.strip() if name_col else ("Vendor " + df_v["clean_vid"])
         df_v["clean_chain_name"] = df_v[cname_col].astype(str).str.strip() if cname_col else ""
         df_v["clean_city"] = df_v[city_col].astype(str).str.strip() if city_col else ""
-        df_v["clean_am"] = df_v[am_col].astype(str).str.strip() if am_col else "-"
+        df_v["clean_am"] = df_v[am_col].fillna("").astype(str).str.strip() if am_col else "-"
 
         df_v["clean_active"] = df_v[active_col].apply(lambda x: parse_yes_no(x, "Yes")) if active_col else "Yes"
         df_v["clean_hidden"] = df_v[hidden_col].apply(lambda x: parse_yes_no(x, "No")) if hidden_col else "No"
 
-        loc_col = get_col(df_v, ["Vendor Attributes Vendor Map Location", "Map Location", "Location", "Coordinates"])
-        lat_col = get_col(df_v, ["Latitude", "lat", "Lat"])
-        lng_col = get_col(df_v, ["Longitude", "lng", "Lng", "Long", "lon"])
+        loc_col = robust_get_col(df_v, ["Vendor Attributes Vendor Map Location", "Map Location", "Location", "Coordinates"])
+        lat_col = robust_get_col(df_v, ["Latitude", "lat", "Lat"])
+        lng_col = robust_get_col(df_v, ["Longitude", "lng", "Lng", "Long", "lon"])
 
         if loc_col:
             coords = df_v[loc_col].astype(str).str.split(r'[,;]+', expand=True)
@@ -220,24 +253,33 @@ def load_data():
 
     # 2. شيت الأداء
     if not df_p.empty:
-        p_vid_col = get_col(df_p, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
-        p_cid_col = get_col(df_p, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
-        p_am_col = get_col(df_p, ["Account Manager", "AM", "AccountManager", "account_manager"])
+        p_vid_col = robust_get_col(df_p, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
+        p_cid_col = robust_get_col(df_p, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
+        p_am_col = robust_get_col(df_p, ["Account Manager", "AM", "AccountManager", "account_manager", "مسؤول الحساب", "مدير الحساب"])
 
         df_p["clean_vid"] = df_p[p_vid_col].apply(normalize_id) if p_vid_col else ""
         df_p["clean_cid"] = df_p[p_cid_col].apply(normalize_id) if p_cid_col else ""
         
+        # ربط الـ AM من شيت الأداء بالفيندورز إذا لم يكن موجوداً
         if p_am_col and not df_v.empty:
-            df_p["clean_am"] = df_p[p_am_col].astype(str).str.strip()
-            if ("clean_am" not in df_v.columns or (df_v["clean_am"] == "-").all()):
-                am_dict = dict(zip(df_p["clean_vid"], df_p["clean_am"]))
-                df_v["clean_am"] = df_v["clean_vid"].map(am_dict).fillna("-")
+            df_p["clean_am"] = df_p[p_am_col].fillna("").astype(str).str.strip()
+            valid_p_ams = df_p[df_p["clean_am"].str.len() > 1]
+            if not valid_p_ams.empty:
+                am_map_vid = dict(zip(valid_p_ams["clean_vid"], valid_p_ams["clean_am"]))
+                am_map_cid = dict(zip(valid_p_ams["clean_cid"], valid_p_ams["clean_am"]))
+                
+                # تحديث الفيندورز
+                mask_no_am = (df_v["clean_am"] == "") | (df_v["clean_am"] == "-") | (df_v["clean_am"].isna())
+                df_v.loc[mask_no_am, "clean_am"] = df_v.loc[mask_no_am, "clean_vid"].map(am_map_vid)
+                mask_still_no = (df_v["clean_am"] == "") | (df_v["clean_am"] == "-") | (df_v["clean_am"].isna())
+                df_v.loc[mask_still_no, "clean_am"] = df_v.loc[mask_still_no, "clean_cid"].map(am_map_cid)
+                df_v["clean_am"] = df_v["clean_am"].fillna("-")
 
-        col_qc = get_col(df_p, ["QC Net Orders", "Net Orders", "Orders", "QC_Net_Orders"])
-        col_fail_ord = get_col(df_p, ["Vendor Net Failed Orders", "Failed Orders", "Net Failed Orders"])
-        col_fail_rate = get_col(df_p, ["Vendor Net Fail Rate", "Fail Rate", "Net Fail Rate", "Fail_Rate"])
-        col_cr = get_col(df_p, ["Contact Rate", "CR", "Contact_Rate"])
-        col_fault_cr = get_col(df_p, ["Vendor Fault Customer Contact Rate", "Vendor Fault CR", "Fault Contact Rate"])
+        col_qc = robust_get_col(df_p, ["QC Net Orders", "Net Orders", "Orders", "QC_Net_Orders"])
+        col_fail_ord = robust_get_col(df_p, ["Vendor Net Failed Orders", "Failed Orders", "Net Failed Orders"])
+        col_fail_rate = robust_get_col(df_p, ["Vendor Net Fail Rate", "Fail Rate", "Net Fail Rate", "Fail_Rate"])
+        col_cr = robust_get_col(df_p, ["Contact Rate", "CR", "Contact_Rate"])
+        col_fault_cr = robust_get_col(df_p, ["Vendor Fault Customer Contact Rate", "Vendor Fault CR", "Fault Contact Rate"])
 
         df_p["qc_orders"] = df_p[col_qc] if col_qc else "-"
         df_p["fail_orders"] = df_p[col_fail_ord] if col_fail_ord else "-"
@@ -247,11 +289,11 @@ def load_data():
 
     # 3. شيت التوصيل
     if not df_d.empty and not df_v.empty:
-        d_vid_col = get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
-        d_cid_col = get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
-        d_zone_col = get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
-        d_time_col = get_col(df_d, ["Delivery Time", "Time", "Duration"])
-        d_fee_col = get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
+        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
+        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
+        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
+        d_time_col = robust_get_col(df_d, ["Delivery Time", "Time", "Duration"])
+        d_fee_col = robust_get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
 
         df_d["clean_vid"] = df_d[d_vid_col].apply(normalize_id) if d_vid_col else ""
         df_d["clean_cid"] = df_d[d_cid_col].apply(normalize_id) if d_cid_col else ""
@@ -267,7 +309,7 @@ def load_data():
 
     # 4. شيت المناطق
     if not df_a.empty:
-        poly_col = get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
+        poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
         if poly_col:
             df_a["cleaned_wkt"] = df_a[poly_col].apply(clean_wkt)
             geometries, valid_indices = [], []
@@ -280,7 +322,7 @@ def load_data():
                         
             gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
             gdf_a["area_size"] = gdf_a["geometry"].area
-            area_name_col = get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name"])
+            area_name_col = robust_get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name"])
             if area_name_col:
                 gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
                 mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
@@ -522,7 +564,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (فلتر per AM + مؤشرات الأداء)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -550,8 +592,10 @@ if is_admin:
                 city_df = user_vendors.copy() if not user_vendors.empty else pd.DataFrame()
 
             with f_col2:
+                # فلتر مسؤول الحساب (AM)
                 if not city_df.empty and "clean_am" in city_df.columns:
-                    all_ams = [T("كل الـ AMs", "All AMs")] + sorted([a for a in city_df["clean_am"].unique() if a and a != "-"])
+                    valid_ams = [a for a in city_df["clean_am"].dropna().unique() if str(a).strip() not in ["", "-", "nan"]]
+                    all_ams = [T("كل الـ AMs", "All AMs")] + sorted(valid_ams)
                 else: all_ams = [T("كل الـ AMs", "All AMs")]
                 selected_am = st.selectbox(T("2. مسؤول الحساب (AM):", "2. Account Manager (AM):"), options=all_ams, key="admin_map_am")
 
@@ -793,7 +837,7 @@ if is_admin:
             st_folium(m_admin, width="100%", height=620, key=f"admin_overview_map_{selected_city}_{selected_am}_{selected_chain}_{selected_vendor}_{selected_active}_{selected_hidden}", returned_objects=[])
 
 # ==========================================
-# Tab 2: Vendor Portal (مع الإدارة المجمعة لتقسيم فروع السلسلة)
+# Tab 2: Vendor Portal (مع خيار تحديد كامل السلسلة Checkbox)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -823,23 +867,25 @@ with tab2:
             st.warning(T("⚠️ لا توجد فروع مربوطة بحسابك حتى الآن.", "⚠️ No branches linked to your account."))
 
     if not p_vends.empty:
-        is_multi = False
-        if len(p_vends) > 1:
-            st.markdown("---")
-            is_multi = st.toggle(
-                T("🔄 تفعيل وضع الإدارة المجمعة لتقسيم المناطق على فروع السلسلة", "🔄 Enable Multi-Branch Allocation Mode"),
+        # زر Checkbox لتحديد كامل فروع السلسلة دفعة واحدة
+        found_cid = p_vends.iloc[0].get("clean_cid", "")
+        chain_siblings = user_vendors[user_vendors["clean_cid"] == found_cid] if found_cid and not user_vendors.empty else p_vends
+        
+        col_chk1, col_chk2 = st.columns([1.5, 2.5])
+        with col_chk1:
+            select_entire_chain = st.checkbox(
+                T(f"☑️ تحديد كامل فروع السلسلة ({len(chain_siblings)} فرع)", f"☑️ Select Entire Chain ({len(chain_siblings)} branches)"),
                 value=False,
-                key="multi_branch_toggle"
+                key="select_entire_chain_chk"
             )
 
-        if is_multi:
-            st.info(T(
-                "✨ أنت الآن في وضع الإدارة المجمعة. قم بتحديد جميع مناطق التغطية ثم عين كل منطقة للفرع المسؤول عنها من جدول التسعير.",
-                "✨ Multi-branch allocation mode active. Select zones, then assign each to its responsible branch in the table."
-            ))
-            t_vid = "MULTI_" + str(p_vends.iloc[0].get("clean_cid", "CHAIN"))
-            vd = p_vends
+        if select_entire_chain:
+            is_multi = True
+            vd = chain_siblings
+            t_vid = "MULTI_" + str(found_cid)
+            st.success(T(f"✨ تم تحديد كافة فروع السلسلة ({len(vd)} فرع) بنجاح!", f"✨ All chain branches ({len(vd)}) selected!"))
         else:
+            is_multi = False
             opt = dict(zip(p_vends["clean_vid"], p_vends["clean_name"] + " (" + p_vends["clean_vid"] + ")"))
             t_vid = st.selectbox(
                 T("اختر الفرع:", "Select Branch:"),
@@ -850,12 +896,25 @@ with tab2:
             vd = p_vends[p_vends["clean_vid"] == t_vid]
 
         if not vd.empty:
+            has_real_coords = False
             if is_multi:
                 v_nm = T("مجموعة فروع السلسلة", "Multiple Branches")
                 v_cid = vd.iloc[0]["clean_cid"]
                 v_cnm = vd.iloc[0].get("clean_chain_name", "")
                 v_city = vd.iloc[0].get("clean_city", "")
-                has_loc = pd.notna(vd["lat"]).any() and pd.notna(vd["lng"]).any()
+                has_real_coords = pd.notna(vd["lat"]).any() and pd.notna(vd["lng"]).any()
+                
+                # عرض مؤشرات أداء السلسلة مجمعة
+                _, cp = get_vendor_and_chain_perf("", v_cid, df_performance)
+                if cp:
+                    st.subheader(T("📊 مؤشرات أداء السلسلة بالكامل (Chain Performance)", "📊 Chain Performance Metrics"))
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric(T("إجمالي طلبات السلسلة", "Chain Net Orders"), cp.get("qc_orders", "-"))
+                    c2.metric(T("إجمالي ملغيات السلسلة", "Chain Failed Orders"), f"{cp.get('fail_orders', '-')} ({cp.get('fail_rate', '-')})")
+                    c3.metric(T("متوسط نسبة الإلغاء", "Chain Fail Rate"), cp.get("fail_rate", "-"))
+                    c4.metric(T("معدل شكاوى السلسلة", "Chain Contact Rate"), cp.get("contact_rate", "-"))
+                    c5.metric(T("شكاوى خطأ فروع السلسلة", "Chain Fault CR"), cp.get("fault_cr", "-"))
+                    st.markdown("---")
             else:
                 vr = vd.iloc[0]
                 v_nm = vr["clean_name"]
@@ -863,7 +922,7 @@ with tab2:
                 v_cnm = vr.get("clean_chain_name", "")
                 v_city = vr.get("clean_city", "")
                 v_am = vr.get("clean_am", "-")
-                has_loc = pd.notna(vr["lat"]) and pd.notna(vr["lng"])
+                has_real_coords = pd.notna(vr["lat"]) and pd.notna(vr["lng"])
                 
                 st.success(f"🏬 **{v_nm}** | {T('المدينة', 'City')}: {v_city} | Vendor ID: `{t_vid}` | Chain: {v_cnm} (`{v_cid}`) | AM: `{v_am}`")
 
@@ -877,11 +936,11 @@ with tab2:
                     with t1:
                         if vp:
                             c1, c2, c3, c4, c5 = st.columns(5)
-                            c1.metric(T("الطلبات الصافية (QC Net Orders)", "QC Net Orders"), vp.get("qc_orders", "-"))
-                            c2.metric(T("الطلبات الملغاة (Failed Orders)", "Failed Orders"), f"{vp.get('fail_orders', '-')} ({vp.get('fail_rate', '-')})")
-                            c3.metric(T("نسبة الإلغاء (Fail Rate)", "Fail Rate"), vp.get("fail_rate", "-"))
-                            c4.metric(T("معدل الشكاوى (Contact Rate)", "Contact Rate"), vp.get("contact_rate", "-"))
-                            c5.metric(T("شكاوى خطأ الفيندور (Fault CR)", "Vendor Fault CR"), vp.get("fault_cr", "-"))
+                            c1.metric(T("الطلبات الصافية", "QC Net Orders"), vp.get("qc_orders", "-"))
+                            c2.metric(T("الطلبات الملغاة", "Failed Orders"), f"{vp.get('fail_orders', '-')} ({vp.get('fail_rate', '-')})")
+                            c3.metric(T("نسبة الإلغاء", "Fail Rate"), vp.get("fail_rate", "-"))
+                            c4.metric(T("معدل الشكاوى", "Contact Rate"), vp.get("contact_rate", "-"))
+                            c5.metric(T("شكاوى خطأ الفرع", "Vendor Fault CR"), vp.get("fault_cr", "-"))
                         else:
                             st.info(T("لا توجد بيانات أداء مسجلة لهذا الفرع.", "No performance data found."))
                     with t2:
@@ -896,6 +955,7 @@ with tab2:
                             st.info(T("لا توجد بيانات مجمعة لهذه السلسلة.", "No chain performance data available."))
                     st.markdown("---")
 
+            has_loc = has_real_coords
             rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 40, 10, key="portal_radius_slider")
             
             if has_loc:
@@ -942,6 +1002,7 @@ with tab2:
 
                 mcnt = [vd["lat"].mean(), vd["lng"].mean()] if (is_multi and has_loc) else ([vr["lat"], vr["lng"]] if has_loc else [30.04, 31.23])
                 vmap = folium.Map(location=mcnt, zoom_start=13 if has_real_coords else 11)
+                
                 if has_loc:
                     plot_branches = vd.dropna(subset=["lat", "lng"]) if is_multi else vd.iloc[[0]]
                     for _, rv in plot_branches.iterrows():
