@@ -31,7 +31,7 @@ div[data-testid="stMetricDelta"] {
     font-size: 12px !important;
 }
 
-/* ضبط حجم النوافذ المنبثقة على الخريطة لتكون مدمجة وتدعم Swipe Down */
+/* ضبط حجم النوافذ المنبثقة على الخريطة لتكون مدمجة وتدعم التمرير */
 .leaflet-popup-content-wrapper {
     border-radius: 8px !important;
     padding: 2px !important;
@@ -542,7 +542,7 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     html += "</div>"
     return html
 
-# دالة ذكية وموثوقة لاستخراج اسم المنطقة وتوقيع النقر
+# دالة ذكية لاستخراج اسم المنطقة والنقر
 def extract_clicked_zone_and_sig(mcd, pa_gdf, all_zones_list):
     clicked_zone = None
     click_sig = None
@@ -1006,7 +1006,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التحديد بالنقر على الخريطة + القائمة بجوار الخريطة)
+# Tab 2: Vendor Portal (التحديد المباشر بالنقر على الخريطة + القائمة بجوار الخريطة)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1100,8 +1100,10 @@ with tab2:
                             raw_fee = str(r.get("clean_fee", "")).strip()
                             try: fee_val = float(raw_fee)
                             except: fee_val = 0.0
+                            raw_t = str(r.get("clean_time", "45 mins")).strip()
+                            final_t = raw_t if (raw_t and raw_t.lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
                             original_alloc[v_id][zn] = {
-                                "time": str(r.get("clean_time", "45 mins")),
+                                "time": final_t,
                                 "fee": fee_val
                             }
                 
@@ -1111,6 +1113,7 @@ with tab2:
                 st.session_state["portal_active_vid"] = list(branch_names.keys())[0] if branch_names else ""
                 st.session_state["portal_show_diff"] = False
                 st.session_state["portal_selected_zone"] = ""
+                st.session_state["just_clicked_map_zone"] = None
 
             working_alloc = st.session_state.get("portal_working_alloc", {})
             orig_alloc = st.session_state.get("portal_orig_alloc", {})
@@ -1133,12 +1136,12 @@ with tab2:
                     with leg_cols[idx % n_cols]:
                         zone_count = len(working_alloc.get(b_vid, {}))
                         is_active_card = (b_vid == active_vid)
-                        border_highlight = f"3px solid {b_info['hex']}" if is_active_card else f"1px solid #dee2e6"
+                        border_highlight = f"3px solid {b_info['hex']}" if is_active_card else "1px solid #dee2e6"
                         bg_highlight = "#e8f4fd" if is_active_card else "#f8f9fa"
+                        tag_html = " <b style='color:#0d6efd;'>🎯 الفرع المحدد</b>" if is_active_card else ""
                         st.markdown(
                             f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 6px solid {b_info['hex']}; border: {border_highlight}; background: {bg_highlight}; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
-                            f"<b>{b_info['name']}</b> ({zone_count} منطقة)"
-                            f"{' <b style=\"color:#0d6efd;\">🎯 الفرع المحدد</b>' if is_active_card else ''}<br>"
+                            f"<b>{b_info['name']}</b> ({zone_count} منطقة){tag_html}<br>"
                             f"<span style='color:gray;'>Vendor ID: {b_vid}</span>"
                             f"</div>",
                             unsafe_allow_html=True
@@ -1177,7 +1180,7 @@ with tab2:
             # الخريطة والتحريك والتحديد
             with cm:
                 st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
-                st.caption(T("💡 انقر على أي مضلع/منطقة على الخريطة ليتم تحديد اسمها تلقائياً في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to instantly select it for editing, adding, or removing."))
+                st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
 
                 # التمركز التلقائي على الفرع المختار
                 active_row = vd[vd["clean_vid"] == active_vid]
@@ -1199,11 +1202,12 @@ with tab2:
                         b_info = branch_color_map.get(b_id_str, {"hex": "#28a745", "folium": "green"})
                         is_active_b = (b_id_str == active_vid)
                         
+                        target_tag = '<span style="color: red; font-weight: bold;">(🎯 الفرع المحدد حالياً للتعديل)</span>' if is_active_b else ''
                         popup_html = f"""<div style='font-family: Arial, sans-serif; font-size: 11px; width: 210px;'>
                         <b style='color: #0d6efd;'>💊 {rv['clean_name']}</b><br>
                         <b>Vendor ID:</b> <code>{b_id_str}</code><br>
                         <b>{T('المناطق المغطاة', 'Covered Zones')}:</b> {len(working_alloc.get(b_id_str, {}))}<br>
-                        {'<span style="color: red; font-weight: bold;">(🎯 الفرع المحدد حالياً للتعديل)</span>' if is_active_b else ''}
+                        {target_tag}
                         </div>"""
 
                         folium.Marker(
@@ -1249,7 +1253,6 @@ with tab2:
                         )
                     ).add_to(vmap)
 
-                # إرجاع نقرات الكائنات والإحداثيات
                 mcd = st_folium(
                     vmap,
                     width="100%",
@@ -1264,6 +1267,7 @@ with tab2:
                     st.session_state["last_poly_click_sig"] = click_sig
                     if clicked_zone:
                         st.session_state["portal_selected_zone"] = clicked_zone
+                        st.session_state["just_clicked_map_zone"] = clicked_zone
                         st.session_state["portal_show_diff"] = False
                         st.rerun()
 
@@ -1271,7 +1275,7 @@ with tab2:
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
-                # قائمة اختيار الفرع المستهدف موجودة هنا مباشرة بجانب الخريطة
+                # قائمة اختيار الفرع المستهدف للتعديل بجوار الخريطة مباشرة
                 if len(vd) > 1:
                     branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
                     branch_keys_list = list(branch_select_opts.keys())
@@ -1286,6 +1290,7 @@ with tab2:
                     )
                     if selected_branch_key != active_vid:
                         st.session_state["portal_active_vid"] = selected_branch_key
+                        st.session_state["portal_selected_zone"] = ""
                         st.rerun()
                 else:
                     st.markdown(
@@ -1294,18 +1299,6 @@ with tab2:
                         f"</div>",
                         unsafe_allow_html=True
                     )
-
-                # تنبيه بالمنطقة المحددة
-                current_sel_zone = st.session_state.get("portal_selected_zone", "").strip()
-                if current_sel_zone:
-                    st.markdown(
-                        f"<div style='background: #fff3cd; border: 1.5px solid #ffeeba; border-radius: 6px; padding: 7px 10px; margin-bottom: 12px; font-size: 13px;'>"
-                        f"📍 <b>المنطقة المحددة من الخريطة:</b> <span style='color: #0d6efd; font-size: 14px; font-weight: bold;'>{current_sel_zone}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.info(T("👆 انقر على أي منطقة على الخريطة ليتم تحديد اسمها تلقائياً هنا.", "👆 Click any zone on the map to auto-fill its name here."))
 
                 action_mode = st.radio(
                     T("اختر نوع التعديل:", "Select Action:"),
@@ -1319,35 +1312,54 @@ with tab2:
 
                 active_branch_zones = working_alloc.get(active_vid, {})
                 active_zones_keys = sorted(list(active_branch_zones.keys()))
+                available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
+
+                # مزامنة النقرة من الخريطة مباشرة في قائمة الاختيار المطلوبة
+                just_clicked = st.session_state.pop("just_clicked_map_zone", None)
+                if just_clicked:
+                    if "تعديل" in action_mode or "Edit" in action_mode:
+                        if just_clicked in active_zones_keys:
+                            st.session_state["portal_edit_zone_select"] = just_clicked
+                    elif "إضافة" in action_mode or "Add" in action_mode:
+                        if just_clicked in available_to_add:
+                            st.session_state["portal_add_zone_select"] = just_clicked
+                    elif "إزالة" in action_mode or "Remove" in action_mode:
+                        if just_clicked in active_zones_keys:
+                            st.session_state["portal_remove_zone_select"] = just_clicked
 
                 # 1. وضع تعديل الوقت والرسوم لمناطق حالية
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
                     else:
-                        def_idx = active_zones_keys.index(current_sel_zone) if current_sel_zone in active_zones_keys else 0
+                        if "portal_edit_zone_select" in st.session_state and st.session_state["portal_edit_zone_select"] not in active_zones_keys:
+                            del st.session_state["portal_edit_zone_select"]
+
                         selected_edit_zone = st.selectbox(
                             T("اسم المنطقة المراد تعديلها:", "Zone to Edit:"),
                             options=active_zones_keys,
-                            index=def_idx,
                             key="portal_edit_zone_select"
                         )
-                        # تحديث المنطقة النشطة إذا غيرها المستخدم يدوياً من القائمة
-                        if selected_edit_zone != current_sel_zone and selected_edit_zone in active_zones_keys:
-                            st.session_state["portal_selected_zone"] = selected_edit_zone
+                        st.session_state["portal_selected_zone"] = selected_edit_zone
 
                         cur_z_info = active_branch_zones.get(selected_edit_zone, {})
+                        raw_t = cur_z_info.get("time", "")
+                        curr_time = str(raw_t).strip() if (raw_t and str(raw_t).strip().lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
+                        raw_f = cur_z_info.get("fee", 25.0)
+                        try: curr_fee = float(raw_f)
+                        except: curr_fee = 25.0
+
                         c_t1, c_t2 = st.columns(2)
                         with c_t1:
                             edit_time_val = st.text_input(
                                 T("وقت التوصيل الجديد:", "New Delivery Time:"),
-                                value=cur_z_info.get("time", "45 mins"),
+                                value=curr_time,
                                 key=f"edit_time_{selected_edit_zone}"
                             )
                         with c_t2:
                             edit_fee_val = st.number_input(
                                 T("رسوم التوصيل الجديدة (EGP):", "New Fee (EGP):"),
-                                value=float(cur_z_info.get("fee", 25.0)),
+                                value=curr_fee,
                                 step=1.0,
                                 key=f"edit_fee_{selected_edit_zone}"
                             )
@@ -1364,19 +1376,18 @@ with tab2:
 
                 # 2. وضع إضافة منطقة لهذا الفرع
                 elif "إضافة" in action_mode or "Add" in action_mode:
-                    available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
                     else:
-                        def_idx = available_to_add.index(current_sel_zone) if current_sel_zone in available_to_add else 0
+                        if "portal_add_zone_select" in st.session_state and st.session_state["portal_add_zone_select"] not in available_to_add:
+                            del st.session_state["portal_add_zone_select"]
+
                         selected_add_zone = st.selectbox(
                             T("اسم المنطقة المراد إضافتها:", "Zone to Add:"),
                             options=available_to_add,
-                            index=def_idx,
                             key="portal_add_zone_select"
                         )
-                        if selected_add_zone != current_sel_zone and selected_add_zone in available_to_add:
-                            st.session_state["portal_selected_zone"] = selected_add_zone
+                        st.session_state["portal_selected_zone"] = selected_add_zone
 
                         other_owner_vid = zone_to_branch_owner.get(selected_add_zone.strip().lower())
                         if other_owner_vid and other_owner_vid != active_vid:
@@ -1385,8 +1396,11 @@ with tab2:
                                 f"⚠️ تنبيه: هذه المنطقة مسجلة حالياً لفرع ({other_b_name}). إضافتها هنا ستنقل تغطيتها تلقائياً إلى ({active_branch_name}).",
                                 f"⚠️ Note: This zone is currently assigned to ({other_b_name}). Adding it here will transfer it to ({active_branch_name})."
                             ))
-                            default_time = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("time", "45 mins")
-                            default_fee = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("fee", 25.0)
+                            raw_ot = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("time", "45 mins")
+                            raw_of = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("fee", 25.0)
+                            default_time = str(raw_ot).strip() if (raw_ot and str(raw_ot).strip().lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
+                            try: default_fee = float(raw_of)
+                            except: default_fee = 25.0
                         else:
                             default_time = "45 mins"
                             default_fee = 25.0
@@ -1395,7 +1409,7 @@ with tab2:
                         with c_a1:
                             add_time_val = st.text_input(T("وقت التوصيل المقترح:", "Delivery Time:"), value=default_time, key=f"add_time_{selected_add_zone}")
                         with c_a2:
-                            add_fee_val = st.number_input(T("رسوم التوصيل المقترحة (EGP):", "Fees (EGP):"), value=float(default_fee), step=1.0, key=f"add_fee_{selected_add_zone}")
+                            add_fee_val = st.number_input(T("رسوم التوصيل المقترحة (EGP):", "Fees (EGP):"), value=default_fee, step=1.0, key=f"add_fee_{selected_add_zone}")
 
                         if st.button(T("➕ تأكيد إضافة المنطقة لهذا الفرع", "➕ Add Zone to Branch"), type="primary", use_container_width=True):
                             if other_owner_vid and other_owner_vid in working_alloc and selected_add_zone in working_alloc[other_owner_vid]:
@@ -1407,6 +1421,9 @@ with tab2:
                             }
                             st.session_state["portal_working_alloc"] = working_alloc
                             st.session_state["portal_show_diff"] = False
+                            st.session_state["portal_selected_zone"] = selected_add_zone
+                            if "portal_add_zone_select" in st.session_state:
+                                del st.session_state["portal_add_zone_select"]
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone} لـ {active_branch_name} بنجاح!", f"Added {selected_add_zone}!"))
                             st.rerun()
 
@@ -1415,15 +1432,15 @@ with tab2:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
                     else:
-                        def_idx = active_zones_keys.index(current_sel_zone) if current_sel_zone in active_zones_keys else 0
+                        if "portal_remove_zone_select" in st.session_state and st.session_state["portal_remove_zone_select"] not in active_zones_keys:
+                            del st.session_state["portal_remove_zone_select"]
+
                         selected_remove_zone = st.selectbox(
                             T("اسم المنطقة المراد إزالتها:", "Zone to Remove:"),
                             options=active_zones_keys,
-                            index=def_idx,
                             key="portal_remove_zone_select"
                         )
-                        if selected_remove_zone != current_sel_zone and selected_remove_zone in active_zones_keys:
-                            st.session_state["portal_selected_zone"] = selected_remove_zone
+                        st.session_state["portal_selected_zone"] = selected_remove_zone
 
                         if st.button(T(f"🗑️ تأكيد إزالة ({selected_remove_zone}) من هذا الفرع", f"🗑️ Remove ({selected_remove_zone})"), type="secondary", use_container_width=True):
                             if selected_remove_zone in working_alloc[active_vid]:
@@ -1431,6 +1448,8 @@ with tab2:
                             st.session_state["portal_working_alloc"] = working_alloc
                             st.session_state["portal_show_diff"] = False
                             st.session_state["portal_selected_zone"] = ""
+                            if "portal_remove_zone_select" in st.session_state:
+                                del st.session_state["portal_remove_zone_select"]
                             st.success(T(f"تمت إزالة منطقة {selected_remove_zone} من {active_branch_name}!", f"Removed {selected_remove_zone}!"))
                             st.rerun()
 
