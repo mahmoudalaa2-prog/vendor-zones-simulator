@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import geopandas as gpd
 from shapely import wkt
-from shapely.geometry import Point
+from shapely.geometry import Point, box, MultiPoint
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
@@ -50,7 +50,12 @@ BRANCH_PALETTE = [
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
     {"hex": "#8540f5", "darkpurple": "darkpurple", "name": "أرجواني"},
-    {"hex": "#a52a2a", "folium": "darkred", "name": "بني"}
+    {"hex": "#a52a2a", "folium": "darkred", "name": "بني"},
+    {"hex": "#ffc107", "folium": "orange", "name": "أصفر ذهبي"},
+    {"hex": "#20c997", "cadetblue": "cadetblue", "name": "تيل"},
+    {"hex": "#6610f2", "darkpurple": "darkpurple", "name": "نيلي"},
+    {"hex": "#fd7e14", "folium": "orange", "name": "برتقالي فاقع"},
+    {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
 ]
 
 # ==========================================
@@ -226,7 +231,7 @@ def load_data():
         cname_col = robust_get_col(df_v, ["Chain Attributes Chain Name", "Chain Name", "chain_name"])
         city_col = robust_get_col(df_v, ["Vendor Attributes Vendor City", "City", "Vendor City"])
 
-        # قراءة عمود مدير الحسابات بدقة: Chain Attributes Latest Chain AM Name
+        # استخراج عمود مسؤول الحساب بدقة: Chain Attributes Latest Chain AM Name
         am_col = None
         for candidate in ["Chain Attributes Latest Chain AM Name", "Latest Chain AM Name", "Vendor Attributes Account Manager", "Account Manager Name", "Account Manager"]:
             for c in df_v.columns:
@@ -336,7 +341,7 @@ def load_data():
             centroids = gdf_a.geometry.centroid
             gdf_a["centroid_lat"] = centroids.y
             gdf_a["centroid_lng"] = centroids.x
-            gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.001, preserve_topology=True)
+            gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0012, preserve_topology=True)
         else: gdf_a = gpd.GeoDataFrame()
     else: gdf_a = gpd.GeoDataFrame()
 
@@ -608,7 +613,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (تحميل سلس وبدون تهنيج مع كل المدن)
+# Tab 1: Admin Map (فلاتر متعددة الاختيار + شبكة المناطق الكاملة)
 # ==========================================
 if is_admin:
     with tab1:
@@ -622,71 +627,79 @@ if is_admin:
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
+            # الفلاتر الأربعة بنظام القوائم المتعددة الاختيار (Multiselect)
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.4, 1.4, 1.2])
             
             with f_col1:
                 if not user_vendors.empty and "clean_city" in user_vendors.columns:
-                    all_cities = [T("كل المدن", "All Cities")] + sorted([c for c in user_vendors["clean_city"].unique() if c])
-                else: all_cities = [T("كل المدن", "All Cities")]
-                selected_city = st.selectbox(T("1. المدينة / المحافظة:", "1. City:"), options=all_cities, key="admin_map_city")
+                    all_cities = sorted([c for c in user_vendors["clean_city"].dropna().unique() if c and c != "-"])
+                else: all_cities = []
+                selected_cities = st.multiselect(
+                    T("1. المدينة / المحافظة:", "1. City:"),
+                    options=all_cities,
+                    default=[],
+                    placeholder=T("الكل (أو اختر مدن)", "All (or select cities)"),
+                    key="admin_map_cities"
+                )
 
-            if not user_vendors.empty and "clean_city" in user_vendors.columns and selected_city != T("كل المدن", "All Cities"):
-                city_df = user_vendors[user_vendors["clean_city"] == selected_city]
-            else:
-                city_df = user_vendors.copy() if not user_vendors.empty else pd.DataFrame()
+            city_subset = user_vendors[user_vendors["clean_city"].isin(selected_cities)] if selected_cities else user_vendors.copy()
 
             with f_col2:
-                # فلتر مسؤول الحساب (AM)
-                if not city_df.empty and "clean_am" in city_df.columns:
-                    valid_ams = [a for a in city_df["clean_am"].unique() if is_valid_am_name(a)]
-                    all_ams = [T("كل الـ AMs", "All AMs")] + sorted(valid_ams)
-                else: all_ams = [T("كل الـ AMs", "All AMs")]
-                selected_am = st.selectbox(T("2. مسؤول الحساب (AM):", "2. Account Manager (AM):"), options=all_ams, key="admin_map_am")
+                if not city_subset.empty and "clean_am" in city_subset.columns:
+                    valid_ams = sorted([a for a in city_subset["clean_am"].dropna().unique() if is_valid_am_name(a)])
+                else: valid_ams = []
+                selected_ams = st.multiselect(
+                    T("2. مسؤول الحساب (AM):", "2. Account Manager (AM):"),
+                    options=valid_ams,
+                    default=[],
+                    placeholder=T("الكل (أو اختر AMs)", "All (or select AMs)"),
+                    key="admin_map_ams"
+                )
 
-            if not city_df.empty and "clean_am" in city_df.columns and selected_am != T("كل الـ AMs", "All AMs"):
-                am_filtered_vendors = city_df[city_df["clean_am"] == selected_am]
-            else:
-                am_filtered_vendors = city_df.copy()
+            am_subset = city_subset[city_subset["clean_am"].isin(selected_ams)] if selected_ams else city_subset.copy()
 
             with f_col3:
-                if not am_filtered_vendors.empty and "clean_cid" in am_filtered_vendors.columns and "clean_chain_name" in am_filtered_vendors.columns:
-                    chains_in_city = am_filtered_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
-                    chains_in_city = chains_in_city[chains_in_city["clean_cid"] != ""]
-                    chain_map = dict(zip(chains_in_city["clean_cid"], chains_in_city["clean_chain_name"] + " (" + chains_in_city["clean_cid"] + ")"))
-                    chain_options = [T("كل السلاسل", "All Chains")] + list(chain_map.keys())
+                if not am_subset.empty and "clean_cid" in am_subset.columns and "clean_chain_name" in am_subset.columns:
+                    chains_in_subset = am_subset[["clean_cid", "clean_chain_name"]].drop_duplicates()
+                    chains_in_subset = chains_in_subset[chains_in_subset["clean_cid"] != ""]
+                    chain_map = dict(zip(chains_in_subset["clean_cid"], chains_in_subset["clean_chain_name"] + " (" + chains_in_subset["clean_cid"] + ")"))
+                    chain_options = sorted(list(chain_map.keys()), key=lambda x: chain_map.get(x, x))
                 else:
                     chain_map = {}
-                    chain_options = [T("كل السلاسل", "All Chains")]
+                    chain_options = []
                     
-                selected_chain = st.selectbox(
+                selected_chains = st.multiselect(
                     T("3. السلسلة (Chain):", "3. Chain:"),
                     options=chain_options,
-                    format_func=lambda x: T("كل السلاسل", "All Chains") if x == T("كل السلاسل", "All Chains") else chain_map.get(x, x),
-                    key="admin_map_chain"
+                    format_func=lambda x: chain_map.get(x, x),
+                    default=[],
+                    placeholder=T("الكل (أو اختر سلاسل)", "All (or select chains)"),
+                    key="admin_map_chains"
                 )
 
-            if not am_filtered_vendors.empty and "clean_cid" in am_filtered_vendors.columns and selected_chain != T("كل السلاسل", "All Chains"):
-                chain_filtered_vendors = am_filtered_vendors[am_filtered_vendors["clean_cid"] == selected_chain]
-            else:
-                chain_filtered_vendors = am_filtered_vendors.copy()
+            chain_subset = am_subset[am_subset["clean_cid"].isin(selected_chains)] if selected_chains else am_subset.copy()
 
             with f_col4:
-                if not chain_filtered_vendors.empty and "clean_vid" in chain_filtered_vendors.columns and "clean_name" in chain_filtered_vendors.columns:
+                if not chain_subset.empty and "clean_vid" in chain_subset.columns and "clean_name" in chain_subset.columns:
                     vendor_opts = dict(zip(
-                        chain_filtered_vendors["clean_vid"],
-                        chain_filtered_vendors["clean_name"] + " (ID: " + chain_filtered_vendors["clean_vid"] + ")"
+                        chain_subset["clean_vid"],
+                        chain_subset["clean_name"] + " (ID: " + chain_subset["clean_vid"] + ")"
                     ))
-                    vendor_options = [T("كل الفروع", "All Vendors")] + list(vendor_opts.keys())
+                    vendor_options = sorted(list(vendor_opts.keys()), key=lambda x: vendor_opts.get(x, x))
                 else:
                     vendor_opts = {}
-                    vendor_options = [T("كل الفروع", "All Vendors")]
+                    vendor_options = []
                     
-                selected_vendor = st.selectbox(
+                selected_vendors = st.multiselect(
                     T("4. الفرع (Vendor):", "4. Vendor:"),
                     options=vendor_options,
-                    format_func=lambda x: T("كل الفروع", "All Vendors") if x == T("كل الفروع", "All Vendors") else vendor_opts.get(x, x),
-                    key="admin_map_vendor"
+                    format_func=lambda x: vendor_opts.get(x, x),
+                    default=[],
+                    placeholder=T("الكل (أو اختر فروع)", "All (or select vendors)"),
+                    key="admin_map_vendors"
                 )
+
+            df_disp = chain_subset[chain_subset["clean_vid"].isin(selected_vendors)] if selected_vendors else chain_subset.copy()
 
             f2_col1, f2_col2, f2_col3 = st.columns([1.5, 1.5, 1.8])
             with f2_col1:
@@ -705,12 +718,11 @@ if is_admin:
                 st.write("")
                 st.write("")
                 if st.button(T("🔄 إعادة ضبط الفلاتر", "🔄 Reset Filters"), key="admin_reset_filters", use_container_width=True):
+                    for k in ["admin_map_cities", "admin_map_ams", "admin_map_chains", "admin_map_vendors", "admin_filter_active", "admin_filter_hidden"]:
+                        if k in st.session_state:
+                            del st.session_state[k]
                     st.rerun()
 
-            df_disp = chain_filtered_vendors.copy() if not chain_filtered_vendors.empty else pd.DataFrame()
-            if not df_disp.empty and "clean_vid" in df_disp.columns and selected_vendor != T("كل الفروع", "All Vendors"):
-                df_disp = df_disp[df_disp["clean_vid"] == selected_vendor]
-                
             if not df_disp.empty and "clean_active" in df_disp.columns:
                 if "Yes" in selected_active or "نشط" in selected_active:
                     df_disp = df_disp[df_disp["clean_active"] == "Yes"]
@@ -756,65 +768,165 @@ if is_admin:
                 delta_color="inverse"
             )
 
-            # تجهيز خريطة الفروع
+            # تجهيز خريطة التغطية والمناطق وتوصيل الفروع
             try:
-                if not plot_vendors.empty:
-                    valid_coords = plot_vendors.dropna(subset=["lat", "lng"])
-                    if not valid_coords.empty:
-                        map_center = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
+                # تعيين ألوان الفروع
+                vendor_color_map = {}
+                distinct_branches = df_disp[["clean_vid", "clean_name", "clean_chain_name"]].drop_duplicates()
+                for idx, (_, b_row) in enumerate(distinct_branches.iterrows()):
+                    pal_entry = BRANCH_PALETTE[idx % len(BRANCH_PALETTE)]
+                    vendor_color_map[b_row["clean_vid"]] = {
+                        "name": b_row["clean_name"],
+                        "hex": pal_entry["hex"],
+                        "folium": pal_entry["folium"],
+                        "chain": b_row["clean_chain_name"],
+                        "color_name": pal_entry["name"]
+                    }
+
+                # ربط مناطق التوصيل بالفروع
+                disp_vids = set(df_disp["clean_vid"].dropna().unique())
+                rel_del = df_delivery[df_delivery["clean_vid"].isin(disp_vids)] if not df_delivery.empty else pd.DataFrame()
+
+                zone_to_vendor_info = {}
+                if not rel_del.empty:
+                    for _, r in rel_del.iterrows():
+                        z_norm = str(r.get("clean_zone", "")).strip().lower()
+                        if not z_norm: continue
+                        vid = str(r.get("clean_vid", ""))
+                        v_info = vendor_color_map.get(vid, {"name": vid, "hex": "#28a745", "folium": "green"})
+                        if z_norm not in zone_to_vendor_info:
+                            zone_to_vendor_info[z_norm] = []
+                        zone_to_vendor_info[z_norm].append({
+                            "vid": vid,
+                            "name": v_info["name"],
+                            "hex": v_info["hex"],
+                            "time": r.get("clean_time", "-"),
+                            "fee": r.get("clean_fee", "-")
+                        })
+
+                # عرض دليل الألوان إذا تم تحديد سلاسل أو فروع محددة
+                if (selected_chains or selected_vendors or (len(vendor_color_map) <= 15 and len(vendor_color_map) > 1)):
+                    st.write(T("🎨 **دليل تمييز ألوان الفروع ومناطق توصيلها:**", "🎨 **Branch Color Legend & Delivery Areas:**"))
+                    n_cols = min(max(len(vendor_color_map), 1), 4)
+                    leg_cols = st.columns(n_cols)
+                    for idx, (b_vid, b_info) in enumerate(vendor_color_map.items()):
+                        with leg_cols[idx % n_cols]:
+                            st.markdown(
+                                f"<div style='padding:6px 10px; border-radius:5px; margin-bottom:6px; border-left: 6px solid {b_info['hex']}; background: #f8f9fa; font-size:12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
+                                f"<b>{b_info['name']}</b><br><span style='color:gray;'>Vendor ID: {b_vid}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+
+                # استخراج وتجهيز شبكة المضلعات الجغرافية بالكامل
+                gdf_areas_to_render = gpd.GeoDataFrame()
+                if not gdf_areas.empty:
+                    covered_names = set(zone_to_vendor_info.keys())
+                    covered_mask = gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(covered_names)
+                    covered_gdf = gdf_areas[covered_mask].copy()
+
+                    if not plot_vendors.empty:
+                        valid_coords = plot_vendors.dropna(subset=["lat", "lng"])
+                        if not valid_coords.empty and len(valid_coords) <= 400:
+                            minx, miny, maxx, maxy = valid_coords["lng"].min(), valid_coords["lat"].min(), valid_coords["lng"].max(), valid_coords["lat"].max()
+                            bbox = box(minx - 0.12, miny - 0.12, maxx + 0.12, maxy + 0.12)
+                            nearby_mask = gdf_areas.geometry.intersects(bbox)
+                            nearby_gdf = gdf_areas[nearby_mask].copy()
+                            gdf_areas_to_render = pd.concat([covered_gdf, nearby_gdf]).drop_duplicates(subset=["Delivery Location Area Name"])
+                        else:
+                            gdf_areas_to_render = covered_gdf
                     else:
-                        map_center = [30.0444, 31.2357]
+                        gdf_areas_to_render = covered_gdf if not covered_gdf.empty else gdf_areas.head(100).copy()
+
+                if not gdf_areas_to_render.empty:
+                    def assign_zone_styling(area_name):
+                        z_clean = str(area_name).strip().lower()
+                        if z_clean in zone_to_vendor_info:
+                            info_list = zone_to_vendor_info[z_clean]
+                            primary_info = info_list[0]
+                            branch_labels = [f"🟢 {x['name']} ({x['time']} - {x['fee']} EGP)" for x in info_list]
+                            desc = " | ".join(branch_labels)
+                            return primary_info["hex"], primary_info["hex"], 0.45, 2.0, desc, True
+                        return "#3388ff", "#002266", 0.08, 1.0, T("منطقة عامة (غير مغطاة)", "General Zone (Uncovered)"), False
+
+                    props = gdf_areas_to_render["Delivery Location Area Name"].apply(assign_zone_styling)
+                    gdf_areas_to_render["fill_color"] = [p[0] for p in props]
+                    gdf_areas_to_render["border_color"] = [p[1] for p in props]
+                    gdf_areas_to_render["fill_opacity"] = [p[2] for p in props]
+                    gdf_areas_to_render["weight"] = [p[3] for p in props]
+                    gdf_areas_to_render["coverage_info"] = [p[4] for p in props]
+
+                # حساب مركز الخريطة ومستوى التكبير
+                if selected_vendors and not plot_vendors.empty:
+                    map_center = [float(plot_vendors.iloc[0]["lat"]), float(plot_vendors.iloc[0]["lng"])]
+                    zoom_lvl = 13
+                elif not plot_vendors.empty:
+                    mean_lat = float(plot_vendors["lat"].mean())
+                    mean_lng = float(plot_vendors["lng"].mean())
+                    map_center = [mean_lat, mean_lng] if (pd.notna(mean_lat) and pd.notna(mean_lng)) else [30.0444, 31.2357]
+                    zoom_lvl = 12 if selected_chains else (10 if selected_cities else 7)
                 else:
                     map_center = [30.0444, 31.2357]
-
-                zoom_lvl = 13 if selected_vendor != T("كل الفروع", "All Vendors") else (11 if selected_chain != T("كل السلاسل", "All Chains") else (9 if selected_city != T("كل المدن", "All Cities") else 7))
+                    zoom_lvl = 7
 
                 m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
-                m_admin.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none !important;}</style>"))
+                css_style = "<style>.leaflet-interactive:focus, path.leaflet-interactive:focus, svg:focus {outline: none !important; box-shadow: none !important;} path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}</style>"
+                m_admin.get_root().html.add_child(folium.Element(css_style))
 
-                # عرض مضلعات التغطية فقط عندما تكون الفروع المحددة قليلة أو تم اختيار سلسلة/فرع محدد لمنع تعليق المتصفح
-                should_render_polygons = (selected_chain != T("كل السلاسل", "All Chains") or selected_vendor != T("كل الفروع", "All Vendors") or len(plot_vendors) <= 25)
+                # رسم مضلعات المناطق وشبكة التوصيل
+                if not gdf_areas_to_render.empty:
+                    folium.GeoJson(
+                        gdf_areas_to_render[["Delivery Location Area Name", "coverage_info", "fill_color", "border_color", "fill_opacity", "weight", "geometry"]].to_json(),
+                        name="Delivery Zones",
+                        style_function=lambda feature: {
+                            "fillColor": feature["properties"].get("fill_color", "#3388ff"),
+                            "color": feature["properties"].get("border_color", "#002266"),
+                            "weight": feature["properties"].get("weight", 1.0),
+                            "fillOpacity": feature["properties"].get("fill_opacity", 0.08)
+                        },
+                        highlight_function=lambda feature: {
+                            "color": "#ffc107",
+                            "weight": 3.5,
+                            "fillOpacity": 0.65
+                        },
+                        tooltip=folium.GeoJsonTooltip(
+                            fields=["Delivery Location Area Name", "coverage_info"],
+                            aliases=[T("المنطقة: ", "Zone: "), T("تغطية الفروع: ", "Branch Delivery: ")]
+                        ),
+                        popup=folium.GeoJsonPopup(
+                            fields=["Delivery Location Area Name", "coverage_info"],
+                            aliases=[T("اسم المنطقة: ", "Zone Name: "), T("الفروع المسؤولة: ", "Responsible Branches: ")]
+                        )
+                    ).add_to(m_admin)
 
-                if should_render_polygons and not gdf_areas.empty and not df_delivery.empty:
-                    disp_vids = set(plot_vendors["clean_vid"].dropna().unique())
-                    rel_del = df_delivery[df_delivery["clean_vid"].isin(disp_vids)]
-                    if not rel_del.empty:
-                        covered_zone_names = set(rel_del["clean_zone"].dropna().str.strip().str.lower().unique())
-                        sub_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].str.strip().str.lower().isin(covered_zone_names)].copy()
-                        if not sub_gdf.empty:
-                            sub_gdf_simple = sub_gdf[["Delivery Location Area Name", "geometry"]].copy()
-                            folium.GeoJson(
-                                sub_gdf_simple.to_json(),
-                                name="Delivery Zones",
-                                style_function=lambda f: {"fillColor": "#28a745", "color": "#155724", "weight": 2.0, "fillOpacity": 0.45},
-                                tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=[T("المنطقة: ", "Zone: ")])
-                            ).add_to(m_admin)
-
+                # إضافة دبابيس الفروع
                 if not plot_vendors.empty:
                     cluster = MarkerCluster().add_to(m_admin)
                     for _, row in plot_vendors.iterrows():
-                        popup_html = build_vendor_popup_html(row, df_delivery, df_performance)
+                        popup_content = build_vendor_popup_html(row, df_delivery, df_performance)
                         vid_str = row["clean_vid"]
-                        is_single_focus = (selected_vendor != T("كل الفروع", "All Vendors") and vid_str == selected_vendor)
+                        b_color_info = vendor_color_map.get(vid_str)
+                        pin_color = b_color_info.get("folium", "green") if b_color_info else "blue"
+                        is_single_focus = (len(selected_vendors) == 1 and vid_str in selected_vendors)
 
                         if is_single_focus:
                             folium.Marker(
                                 location=[row['lat'], row['lng']],
-                                popup=folium.Popup(popup_html, max_width=320),
+                                popup=folium.Popup(popup_content, max_width=320),
                                 tooltip=f"💊 {row['clean_name']} (ID: {vid_str})",
                                 icon=folium.Icon(color="green", icon="medkit", prefix="fa")
                             ).add_to(m_admin)
                         else:
                             folium.Marker(
                                 location=[row['lat'], row['lng']],
-                                popup=folium.Popup(popup_html, max_width=320),
+                                popup=folium.Popup(popup_content, max_width=320),
                                 tooltip=f"💊 {row['clean_name']} ({vid_str})",
-                                icon=folium.Icon(color="blue", icon="medkit", prefix="fa")
+                                icon=folium.Icon(color=pin_color, icon="medkit", prefix="fa")
                             ).add_to(cluster)
 
-                st_folium(m_admin, width="100%", height=620, key=f"admin_map_folium_{len(plot_vendors)}_{selected_vendor}", returned_objects=[])
+                st_folium(m_admin, width="100%", height=620, key="admin_overview_map_folium", returned_objects=[])
             except Exception as e:
-                st.warning(f"تعذر رسم بعض عناصر الخريطة تلقائياً: {e}")
+                st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة التفصيلية: {e}")
 
 # ==========================================
 # Tab 2: Vendor Portal (مع خيار تحديد كامل فروع السلسلة دفعة واحدة)
