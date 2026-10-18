@@ -542,6 +542,44 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     html += "</div>"
     return html
 
+# دالة ذكية وموثوقة لاستخراج اسم المنطقة وتوقيع النقر
+def extract_clicked_zone_and_sig(mcd, pa_gdf, all_zones_list):
+    clicked_zone = None
+    click_sig = None
+    if not mcd:
+        return None, None
+        
+    obj = mcd.get("last_object_clicked")
+    if obj and isinstance(obj, dict):
+        props = obj.get("properties") or {}
+        candidate = props.get("Delivery Location Area Name") or props.get("name")
+        if candidate and candidate in all_zones_list:
+            clicked_zone = candidate
+            click_sig = f"obj_{candidate}_{obj.get('lat')}_{obj.get('lng')}"
+            
+    if not clicked_zone:
+        click_pt_info = mcd.get("last_clicked") or obj
+        if click_pt_info and isinstance(click_pt_info, dict):
+            lat = click_pt_info.get("lat")
+            lng = click_pt_info.get("lng")
+            if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
+                pt = Point(lng, lat)
+                matching = pa_gdf[pa_gdf.geometry.contains(pt)]
+                if not matching.empty:
+                    clicked_zone = matching.iloc[0]["Delivery Location Area Name"]
+                    click_sig = f"geom_{clicked_zone}_{lat}_{lng}"
+                else:
+                    matching_buf = pa_gdf[pa_gdf.geometry.distance(pt) < 0.0015]
+                    if not matching_buf.empty:
+                        clicked_zone = matching_buf.iloc[0]["Delivery Location Area Name"]
+                        click_sig = f"buf_{clicked_zone}_{lat}_{lng}"
+
+    if not click_sig and mcd.get("last_clicked"):
+        lc = mcd["last_clicked"]
+        click_sig = f"raw_{lc.get('lat')}_{lc.get('lng')}"
+        
+    return clicked_zone, click_sig
+
 # ==========================================
 # 5. شاشة تسجيل الدخول
 # ==========================================
@@ -968,7 +1006,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التحديد بالنقر على الخريطة + تحريك الكاميرا تلقائياً)
+# Tab 2: Vendor Portal (التحديد بالنقر على الخريطة + القائمة بجوار الخريطة)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1019,7 +1057,7 @@ with tab2:
             is_multi = False
             opt = dict(zip(p_vends["clean_vid"], p_vends["clean_name"] + " (" + p_vends["clean_vid"] + ")"))
             single_chosen_vid = st.selectbox(
-                T("اختر الفرع:", "Select Branch:"),
+                T("اختر الفرع الرئيسي:", "Select Main Branch:"),
                 list(opt.keys()),
                 format_func=lambda x: opt[x],
                 key="single_vendor_select"
@@ -1077,29 +1115,16 @@ with tab2:
             working_alloc = st.session_state.get("portal_working_alloc", {})
             orig_alloc = st.session_state.get("portal_orig_alloc", {})
 
-            # اختيار الفرع النشط للتعديل
-            if len(vd) > 1:
-                branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
-                curr_active_vid = st.session_state.get("portal_active_vid", list(branch_names.keys())[0])
-                if curr_active_vid not in branch_select_opts:
-                    curr_active_vid = list(branch_names.keys())[0]
-                
-                active_vid = st.selectbox(
-                    T("🏬 اختر الفرع المستهدف للتعديل (تتحرك الخريطة عليه فوراً):", "🏬 Select Target Branch to Focus & Edit:"),
-                    options=list(branch_select_opts.keys()),
-                    index=list(branch_select_opts.keys()).index(curr_active_vid),
-                    format_func=lambda x: branch_select_opts[x],
-                    key="portal_active_branch_select"
-                )
-                st.session_state["portal_active_vid"] = active_vid
-            else:
-                active_vid = str(vd.iloc[0]["clean_vid"])
-                st.session_state["portal_active_vid"] = active_vid
+            # قراءة الفرع النشط مبكراً لضبط تمركز الخريطة
+            active_vid = st.session_state.get("portal_active_branch_select") or st.session_state.get("portal_active_vid") or (list(branch_names.keys())[0] if branch_names else "")
+            if active_vid not in branch_names and branch_names:
+                active_vid = list(branch_names.keys())[0]
+            st.session_state["portal_active_vid"] = active_vid
 
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
-            # دليل الألوان
+            # دليل ألوان السلسلة
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -1121,7 +1146,7 @@ with tab2:
 
             rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
 
-            # استخراج كافة المناطق الجغرافية
+            # استخراج مضلعات التغطية
             all_chain_covered_zones = set()
             for v_id, z_dict in working_alloc.items():
                 for z in z_dict:
@@ -1147,19 +1172,18 @@ with tab2:
                 for z in z_dict:
                     zone_to_branch_owner[z.strip().lower()] = v_id
 
-            # تقسيم الشاشة إلى عمودين
             cm, cf = st.columns([6, 4])
 
-            # أولاً: تشغيل الخريطة والتقاط الكليك فوراً
+            # الخريطة والتحريك والتحديد
             with cm:
                 st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي مضلع/منطقة على الخريطة ليتم تحديد اسمها تلقائياً في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to instantly select it for editing, adding, or removing."))
 
-                # تحريك الخريطة تلقائياً على الفرع المحدد
+                # التمركز التلقائي على الفرع المختار
                 active_row = vd[vd["clean_vid"] == active_vid]
                 if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
                     mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
-                    zoom_lvl = 14  # زووم مباشر على الفرع المحدد
+                    zoom_lvl = 14
                 elif not valid_coords.empty:
                     mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
                     zoom_lvl = 12
@@ -1179,7 +1203,7 @@ with tab2:
                         <b style='color: #0d6efd;'>💊 {rv['clean_name']}</b><br>
                         <b>Vendor ID:</b> <code>{b_id_str}</code><br>
                         <b>{T('المناطق المغطاة', 'Covered Zones')}:</b> {len(working_alloc.get(b_id_str, {}))}<br>
-                        {'<span style="color: green; font-weight: bold;">(🎯 الفرع المحدد حالياً للتعديل)</span>' if is_active_b else ''}
+                        {'<span style="color: red; font-weight: bold;">(🎯 الفرع المحدد حالياً للتعديل)</span>' if is_active_b else ''}
                         </div>"""
 
                         folium.Marker(
@@ -1191,7 +1215,6 @@ with tab2:
 
                 vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ffc107 !important; stroke-width:3.5px !important; cursor:pointer;}</style>"))
 
-                # رسم المضلعات وتظليل المنطقة المحددة حالياً
                 selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
 
                 if not pa.empty:
@@ -1207,14 +1230,14 @@ with tab2:
                             return {
                                 "fillColor": "#ffc107" if is_clicked_target else b_hex,
                                 "color": "#000000" if is_clicked_target else b_hex,
-                                "weight": 4.0 if is_clicked_target else (3.0 if is_active_owner else 1.2),
-                                "fillOpacity": 0.75 if is_clicked_target else (0.6 if is_active_owner else 0.3)
+                                "weight": 4.5 if is_clicked_target else (3.0 if is_active_owner else 1.2),
+                                "fillOpacity": 0.8 if is_clicked_target else (0.6 if is_active_owner else 0.3)
                             }
                         return {
                             "fillColor": "#ffc107" if is_clicked_target else "#3388ff",
                             "color": "#000000" if is_clicked_target else "#002266",
-                            "weight": 3.0 if is_clicked_target else 1.0,
-                            "fillOpacity": 0.55 if is_clicked_target else 0.08
+                            "weight": 3.5 if is_clicked_target else 1.0,
+                            "fillOpacity": 0.65 if is_clicked_target else 0.08
                         }
 
                     folium.GeoJson(
@@ -1226,39 +1249,53 @@ with tab2:
                         )
                     ).add_to(vmap)
 
-                # الخريطة تتمركز تلقائياً على الفرع لأن الكي يحتوي على active_vid
+                # إرجاع نقرات الكائنات والإحداثيات
                 mcd = st_folium(
                     vmap,
                     width="100%",
                     height=540,
                     key=f"vmap_portal_{portal_session_key}_{active_vid}_{rad}",
-                    returned_objects=["last_object_clicked"]
+                    returned_objects=["last_object_clicked", "last_clicked"]
                 )
 
-                # التقاط النقر على المنطقة فوراً
-                if mcd and mcd.get("last_object_clicked"):
-                    clicked_props = mcd["last_object_clicked"].get("properties") or {}
-                    clicked_poly_name = clicked_props.get("Delivery Location Area Name")
-                    if clicked_poly_name and clicked_poly_name in all_known_zones:
-                        c_sig = f"{clicked_poly_name}_{np.random.randint(100)}"
-                        if c_sig != st.session_state.get("last_poly_click_sig"):
-                            st.session_state["last_poly_click_sig"] = c_sig
-                            st.session_state["portal_selected_zone"] = clicked_poly_name
-                            st.session_state["portal_show_diff"] = False
-                            st.rerun()
+                # التقاط النقر على المنطقة بدقة كاملة ومنع إعادة التشغيل اللانهائي
+                clicked_zone, click_sig = extract_clicked_zone_and_sig(mcd, pa, all_known_zones)
+                if click_sig and click_sig != st.session_state.get("last_poly_click_sig"):
+                    st.session_state["last_poly_click_sig"] = click_sig
+                    if clicked_zone:
+                        st.session_state["portal_selected_zone"] = clicked_zone
+                        st.session_state["portal_show_diff"] = False
+                        st.rerun()
 
-            # ثانياً: لوحة التحكم بالتعديل والإضافة والإزالة
+            # لوحة التحكم بجوار الخريطة
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
-                st.markdown(
-                    f"<div style='border-left: 5px solid {active_branch_color}; background: #fdfdfd; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px;'>"
-                    f"<b>🎯 الفرع النشط للتعديل:</b> <span style='color:#0d6efd;'>{active_branch_name}</span> (ID: <code>{active_vid}</code>)"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
+                # قائمة اختيار الفرع المستهدف موجودة هنا مباشرة بجانب الخريطة
+                if len(vd) > 1:
+                    branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
+                    branch_keys_list = list(branch_select_opts.keys())
+                    current_idx = branch_keys_list.index(active_vid) if active_vid in branch_keys_list else 0
+                    
+                    selected_branch_key = st.selectbox(
+                        T("🏬 اختر الفرع المستهدف للتعديل (تتحرك الخريطة عليه فوراً):", "🏬 Target Branch (Map auto-centers here):"),
+                        options=branch_keys_list,
+                        index=current_idx,
+                        format_func=lambda x: branch_select_opts[x],
+                        key="portal_active_branch_select"
+                    )
+                    if selected_branch_key != active_vid:
+                        st.session_state["portal_active_vid"] = selected_branch_key
+                        st.rerun()
+                else:
+                    st.markdown(
+                        f"<div style='border-left: 5px solid {active_branch_color}; background: #fdfdfd; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px;'>"
+                        f"<b>🎯 الفرع المسؤول:</b> <span style='color:#0d6efd;'>{active_branch_name}</span> (ID: <code>{active_vid}</code>)"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
 
-                # عرض المنطقة المختارة من الخريطة
+                # تنبيه بالمنطقة المحددة
                 current_sel_zone = st.session_state.get("portal_selected_zone", "").strip()
                 if current_sel_zone:
                     st.markdown(
@@ -1268,7 +1305,7 @@ with tab2:
                         unsafe_allow_html=True
                     )
                 else:
-                    st.info(T("👆 انقر على أي منطقة على الخريطة لتحديدها فوراً للتعديل أو الإضافة أو الإزالة.", "👆 Click any zone on map to select it immediately."))
+                    st.info(T("👆 انقر على أي منطقة على الخريطة ليتم تحديد اسمها تلقائياً هنا.", "👆 Click any zone on the map to auto-fill its name here."))
 
                 action_mode = st.radio(
                     T("اختر نوع التعديل:", "Select Action:"),
@@ -1283,7 +1320,7 @@ with tab2:
                 active_branch_zones = working_alloc.get(active_vid, {})
                 active_zones_keys = sorted(list(active_branch_zones.keys()))
 
-                # 1. وضع تعديل الوقت والرسوم
+                # 1. وضع تعديل الوقت والرسوم لمناطق حالية
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
@@ -1295,8 +1332,11 @@ with tab2:
                             index=def_idx,
                             key="portal_edit_zone_select"
                         )
+                        # تحديث المنطقة النشطة إذا غيرها المستخدم يدوياً من القائمة
+                        if selected_edit_zone != current_sel_zone and selected_edit_zone in active_zones_keys:
+                            st.session_state["portal_selected_zone"] = selected_edit_zone
+
                         cur_z_info = active_branch_zones.get(selected_edit_zone, {})
-                        
                         c_t1, c_t2 = st.columns(2)
                         with c_t1:
                             edit_time_val = st.text_input(
@@ -1322,7 +1362,7 @@ with tab2:
                             st.success(T(f"تم تحديث بيانات منطقة {selected_edit_zone} بنجاح!", f"Updated {selected_edit_zone}!"))
                             st.rerun()
 
-                # 2. وضع إضافة منطقة
+                # 2. وضع إضافة منطقة لهذا الفرع
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
                     if not available_to_add:
@@ -1335,12 +1375,14 @@ with tab2:
                             index=def_idx,
                             key="portal_add_zone_select"
                         )
-                        
+                        if selected_add_zone != current_sel_zone and selected_add_zone in available_to_add:
+                            st.session_state["portal_selected_zone"] = selected_add_zone
+
                         other_owner_vid = zone_to_branch_owner.get(selected_add_zone.strip().lower())
                         if other_owner_vid and other_owner_vid != active_vid:
                             other_b_name = branch_names.get(other_owner_vid, other_owner_vid)
                             st.warning(T(
-                                f"⚠️ تنبيه: هذه المنطقة مسجلة حالياً لـ ({other_b_name}). إضافتها هنا ستنقل تغطيتها تلقائياً إلى ({active_branch_name}).",
+                                f"⚠️ تنبيه: هذه المنطقة مسجلة حالياً لفرع ({other_b_name}). إضافتها هنا ستنقل تغطيتها تلقائياً إلى ({active_branch_name}).",
                                 f"⚠️ Note: This zone is currently assigned to ({other_b_name}). Adding it here will transfer it to ({active_branch_name})."
                             ))
                             default_time = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("time", "45 mins")
@@ -1368,7 +1410,7 @@ with tab2:
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone} لـ {active_branch_name} بنجاح!", f"Added {selected_add_zone}!"))
                             st.rerun()
 
-                # 3. وضع إزالة منطقة
+                # 3. وضع إزالة منطقة من هذا الفرع
                 elif "إزالة" in action_mode or "Remove" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
@@ -1380,6 +1422,9 @@ with tab2:
                             index=def_idx,
                             key="portal_remove_zone_select"
                         )
+                        if selected_remove_zone != current_sel_zone and selected_remove_zone in active_zones_keys:
+                            st.session_state["portal_selected_zone"] = selected_remove_zone
+
                         if st.button(T(f"🗑️ تأكيد إزالة ({selected_remove_zone}) من هذا الفرع", f"🗑️ Remove ({selected_remove_zone})"), type="secondary", use_container_width=True):
                             if selected_remove_zone in working_alloc[active_vid]:
                                 del working_alloc[active_vid][selected_remove_zone]
