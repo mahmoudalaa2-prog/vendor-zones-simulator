@@ -76,6 +76,11 @@ BRANCH_PALETTE = [
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
 
+REQUESTS_COLUMNS = [
+    "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
+    "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Final_Status", "Status"
+]
+
 def init_users_db():
     if not os.path.exists(USERS_FILE):
         pd.DataFrame([{
@@ -154,14 +159,6 @@ def is_valid_am_name(val):
 def clean_wkt(polygon_str):
     if not isinstance(polygon_str, str): return None
     return re.sub(r',\s*\)\)', '))', re.sub(r'polygon\(\(\s*,\s*', 'polygon((', polygon_str.strip(), flags=re.IGNORECASE))
-
-def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0 
-    dlat = np.radians(lat2 - lat1)
-    dlon = np.radians(lon2 - lon1)
-    a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    return R * c
 
 def robust_get_col(df, possible_names):
     if len(df.columns) == 0: return None
@@ -441,19 +438,43 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
 
 def init_requests_db():
     if not os.path.exists(REQUESTS_FILE):
-        pd.DataFrame(columns=[
-            "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
-            "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Final_Status", "Status"
-        ]).to_csv(REQUESTS_FILE, index=False)
+        pd.DataFrame(columns=REQUESTS_COLUMNS).to_csv(REQUESTS_FILE, index=False)
 
 def save_detailed_request(vendor_id, vendor_name, edited_df):
     init_requests_db()
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    save_df = edited_df.copy()
-    save_df.insert(0, "Date", date_str)
-    save_df.insert(1, "Vendor ID", str(vendor_id))
-    save_df.insert(2, "Vendor Name", vendor_name)
-    save_df["Status"] = "Pending"
+    
+    records = []
+    for _, r in edited_df.iterrows():
+        # استخراج وتوحيد قيم الحقول الـ 11 بدقة تامة
+        z_name = str(r.get("Zone", "")).strip()
+        classification = str(r.get("Classification", "Vendor Zone Update")).strip()
+        action = str(r.get("Action", "Active")).strip()
+        dist = str(r.get("Distance (km)", "-")).strip()
+        d_time = str(r.get("Delivery Time", "45 mins")).strip()
+        
+        # الرسوم قد تأتي تحت اسم Fees أو Delivery Fees أو Delivery Fees (EGP)
+        fee_val = r.get("Delivery Fees") or r.get("Delivery Fees (EGP)") or r.get("Fees") or 25.0
+        try: fee_val = float(fee_val)
+        except: fee_val = 25.0
+        
+        final_status = str(r.get("Final_Status", "Active (Existing)")).strip()
+        
+        records.append({
+            "Date": date_str,
+            "Vendor ID": str(vendor_id),
+            "Vendor Name": str(vendor_name),
+            "Zone": z_name,
+            "Classification": classification,
+            "Action": action,
+            "Distance (km)": dist,
+            "Delivery Time": d_time,
+            "Delivery Fees": fee_val,
+            "Final_Status": final_status,
+            "Status": "Pending"
+        })
+        
+    save_df = pd.DataFrame(records, columns=REQUESTS_COLUMNS)
     save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
 
 def build_zone_popup_card(area_name, info_list):
@@ -1303,7 +1324,6 @@ with tab2:
                 just_clicked = st.session_state.pop("just_clicked_map_zone", None)
                 if just_clicked:
                     if just_clicked in active_zones_keys:
-                        # المنطقة مسجلة للفرع -> توجيه تلقائي للتعديل أو الحذف
                         curr_m = st.session_state.get("portal_action_mode_radio", opt_edit)
                         if "إزالة" in curr_m or "Remove" in curr_m:
                             st.session_state["portal_action_mode_radio"] = opt_del
@@ -1312,7 +1332,6 @@ with tab2:
                             st.session_state["portal_action_mode_radio"] = opt_edit
                             st.session_state["portal_edit_zone_select"] = just_clicked
                     elif just_clicked in available_to_add:
-                        # المنطقة غير مسجلة للفرع -> توجيه تلقائي وفوري لوضع الإضافة
                         st.session_state["portal_action_mode_radio"] = opt_add
                         st.session_state["portal_add_zone_select"] = just_clicked
 
@@ -1581,9 +1600,12 @@ if is_admin:
         init_requests_db()
         
         has_requests = False
+        raw_df = pd.DataFrame()
         if os.path.exists(REQUESTS_FILE):
             try:
-                raw_df = pd.read_csv(REQUESTS_FILE)
+                # قراءة آمنة مع تجاوز أي أسطر تالفة سابقة
+                raw_df = pd.read_csv(REQUESTS_FILE, on_bad_lines='skip')
+                # التأكد من صحة الأعمدة الأساسية
                 if not raw_df.empty and "Zone" in raw_df.columns:
                     has_requests = True
                     raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
@@ -1677,7 +1699,8 @@ if is_admin:
 
                     with col_d3:
                         if st.button(T("🗑️ حذف جميع الطلبات", "🗑️ Delete All"), type="secondary", use_container_width=True):
-                            os.remove(REQUESTS_FILE)
+                            if os.path.exists(REQUESTS_FILE):
+                                os.remove(REQUESTS_FILE)
                             init_requests_db()
                             st.rerun()
 
@@ -1687,9 +1710,19 @@ if is_admin:
                         st.dataframe(download_df, hide_index=True, use_container_width=True)
             except Exception as e:
                 st.error(f"حدث خطأ أثناء قراءة الطلبات: {e}")
+                if st.button(T("🛠️ إصلاح وإعادة تهيئة ملف الطلبات", "🛠️ Reset & Repair Requests File"), type="primary"):
+                    if os.path.exists(REQUESTS_FILE):
+                        os.remove(REQUESTS_FILE)
+                    init_requests_db()
+                    st.rerun()
 
         if not has_requests:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع.", "📭 No incoming requests found."))
+            if os.path.exists(REQUESTS_FILE):
+                if st.button(T("🔄 تنظيف وإعادة تهيئة السجل", "🔄 Reset Clean Requests DB")):
+                    os.remove(REQUESTS_FILE)
+                    init_requests_db()
+                    st.rerun()
 
 # ==========================================
 # Tab 4: Users Management
