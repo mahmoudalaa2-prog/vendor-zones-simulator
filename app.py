@@ -14,7 +14,7 @@ import requests
 from datetime import datetime
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات الكاملة
+# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
@@ -24,7 +24,7 @@ st.markdown("""
    TALABAT BRANDING THEME (ORANGE & SLEEK MODERN DASHBOARD UI)
    ========================================================== */
 
-/* 1. كروت مؤشرات الأداء (Metrics) بهوية طلبات البرتقالية */
+/* كروت مؤشرات الأداء (Metrics) */
 div[data-testid="stMetric"] {
     background: rgba(255, 255, 255, 0.02) !important;
     border: 1px solid rgba(255, 90, 0, 0.22) !important;
@@ -52,7 +52,7 @@ div[data-testid="stMetricDelta"] {
     font-size: 12px !important;
 }
 
-/* 2. أزرار طلبات البرتقالية الأساسية والثانوية */
+/* أزرار طلبات الأساسية والثانوية */
 button[kind="primary"], .stButton > button[kind="primary"] {
     background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%) !important;
     color: #ffffff !important;
@@ -80,7 +80,7 @@ button[kind="secondary"]:hover, .stButton > button[kind="secondary"]:hover {
     background: rgba(255, 90, 0, 0.08) !important;
 }
 
-/* 3. تبويبات الداشبورد العلوية (Tabs) */
+/* تبويبات الداشبورد (Tabs) */
 button[data-baseweb="tab"] {
     font-size: 14.5px !important;
     font-weight: 600 !important;
@@ -105,21 +105,14 @@ div[data-baseweb="tab-border"] {
     background-color: rgba(255, 90, 0, 0.2) !important;
 }
 
-/* 4. القائمة الجانبية (Sidebar) */
+/* القائمة الجانبية (Sidebar) */
 section[data-testid="stSidebar"] {
     border-left: 1px solid rgba(255, 90, 0, 0.2) !important;
     border-right: 1px solid rgba(255, 90, 0, 0.2) !important;
     background: linear-gradient(180deg, rgba(255, 90, 0, 0.06) 0%, rgba(14, 17, 23, 0) 100%) !important;
 }
 
-/* 5. العناوين الرئيسية والفواصل */
-h2 {
-    border-bottom: 2px solid rgba(255, 90, 0, 0.3) !important;
-    padding-bottom: 8px !important;
-    margin-bottom: 16px !important;
-}
-
-/* 6. عناصر الإدخال، الاختيار والقوائم */
+/* عناصر الإدخال، الاختيار والقوائم */
 div[data-baseweb="input"]:focus-within,
 div[data-baseweb="select"]:focus-within {
     border-color: #ff5a00 !important;
@@ -150,7 +143,7 @@ div[data-testid="stToggleSwitch"] input:checked + div {
     background-color: #ff5a00 !important;
 }
 
-/* 7. بطاقة تسجيل الدخول */
+/* بطاقة تسجيل الدخول */
 form[data-testid="stForm"] {
     border: 1px solid rgba(255, 90, 0, 0.3) !important;
     border-top: 4px solid #ff5a00 !important;
@@ -161,7 +154,7 @@ form[data-testid="stForm"] {
     box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35) !important;
 }
 
-/* 8. نوافذ الخريطة المنبثقة */
+/* نوافذ الخريطة المنبثقة */
 .leaflet-popup-content-wrapper {
     border-radius: 8px !important;
     padding: 2px !important;
@@ -286,7 +279,7 @@ def delete_user(email, current_user_dict=None):
     return True, T("تم حذف الحساب بنجاح!", "User deleted successfully!")
 
 # ==========================================
-# 3. دوال المعالجة والمسافات
+# 3. دوال المعالجة المتقدمة للـ WKT والمسافات
 # ==========================================
 def normalize_id(val):
     if pd.isna(val): return ""
@@ -308,9 +301,20 @@ def is_valid_am_name(val):
     if s.replace(".", "").isdigit(): return False
     return True
 
+# معالج WKT المطور لدعم كرداسة وناهيا والـ SRID وكافة المحافظات
 def clean_wkt(polygon_str):
-    if not isinstance(polygon_str, str): return None
-    return re.sub(r',\s*\)\)', '))', re.sub(r'polygon\(\(\s*,\s*', 'polygon((', polygon_str.strip(), flags=re.IGNORECASE))
+    if pd.isna(polygon_str) or not str(polygon_str).strip():
+        return None
+    s = str(polygon_str).strip()
+    # 1. إزالة بادئة PostGIS مثل SRID=4326;
+    s = re.sub(r'^SRID=\d+;', '', s, flags=re.IGNORECASE).strip()
+    # 2. تنظيف الفواصل العالقة قبل الأقواس المغلقة
+    s = re.sub(r',\s*\)', ')', s)
+    s = re.sub(r',\s*\)', ')', s)
+    s = re.sub(r'\(\s*,', '(', s)
+    # 3. إزالة المسافات المتكررة
+    s = re.sub(r'\s+', ' ', s)
+    return s
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0 
@@ -398,6 +402,44 @@ def read_google_sheet_csv(url):
     except Exception: pass
     try: return pd.read_csv(csv_url)
     except Exception: return pd.DataFrame()
+
+# دالة معالجة مضلعات المناطق الجغرافية بالكامل
+def process_areas_dataframe(df_a):
+    if df_a.empty:
+        return gpd.GeoDataFrame()
+    poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon", "geometry", "geom", "the_geom"])
+    if not poly_col:
+        return gpd.GeoDataFrame()
+        
+    df_a["cleaned_wkt"] = df_a[poly_col].apply(clean_wkt)
+    geometries, valid_indices = [], []
+    for idx, wkt_str in df_a["cleaned_wkt"].items():
+        if pd.notnull(wkt_str):
+            try:
+                geom = wkt.loads(wkt_str)
+                geometries.append(geom)
+                valid_indices.append(idx)
+            except Exception: pass
+                
+    if not valid_indices:
+        return gpd.GeoDataFrame()
+        
+    gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
+    gdf_a["area_size"] = gdf_a["geometry"].area
+    area_name_col = robust_get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name", "Zone", "Area", "Zone Name"])
+    if area_name_col:
+        gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
+        # إزالة مضلعات ماكدونالدز التجريبية فقط دون استبعاد مضلعات المحافظات الكبيرة
+        mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
+        gdf_a = gdf_a[~mask_mcd].copy()
+        
+    gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
+    centroids = gdf_a.geometry.centroid
+    gdf_a["centroid_lat"] = centroids.y
+    gdf_a["centroid_lng"] = centroids.x
+    # تبسيط المضلعات لتحقيق أقصى سرعة عرض دون التضحية بالدقة
+    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0008, preserve_topology=True)
+    return gdf_a
 
 # ==========================================
 # 4. جلب وتجهيز البيانات
@@ -513,34 +555,7 @@ def load_data():
         mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
         df_d = df_d[mask].copy()
 
-    if not df_a.empty:
-        poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon"])
-        if poly_col:
-            df_a["cleaned_wkt"] = df_a[poly_col].apply(clean_wkt)
-            geometries, valid_indices = [], []
-            for idx, wkt_str in df_a["cleaned_wkt"].items():
-                if pd.notnull(wkt_str):
-                    try:
-                        geometries.append(wkt.loads(wkt_str))
-                        valid_indices.append(idx)
-                    except Exception: pass
-                        
-            gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
-            gdf_a["area_size"] = gdf_a["geometry"].area
-            area_name_col = robust_get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name"])
-            if area_name_col:
-                gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
-                mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
-                gdf_a = gdf_a[(~mask_mcd) & (gdf_a["area_size"] < 0.5)].copy()
-                
-            gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
-            centroids = gdf_a.geometry.centroid
-            gdf_a["centroid_lat"] = centroids.y
-            gdf_a["centroid_lng"] = centroids.x
-            gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0012, preserve_topology=True)
-        else: gdf_a = gpd.GeoDataFrame()
-    else: gdf_a = gpd.GeoDataFrame()
-
+    gdf_a = process_areas_dataframe(df_a)
     return df_v, gdf_a, df_d, df_p
 
 df_vendors, gdf_areas, df_delivery, df_performance = load_data()
@@ -628,7 +643,7 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                     c_perf = c_match.iloc[0].to_dict()
     return v_perf, c_perf
 
-# نظام حفظ الطلبات المزدوج لمنع اختفائها على الإطلاق
+# نظام حفظ الطلبات المزدوج
 def init_requests_db():
     if not os.path.exists(REQUESTS_FILE):
         pd.DataFrame(columns=REQUESTS_COLUMNS).to_csv(REQUESTS_FILE, index=False)
@@ -707,9 +722,10 @@ def get_all_requests_df():
 def build_zone_popup_card(area_name, info_list):
     if not info_list:
         return (
-            "<div style='font-family: Arial, sans-serif; font-size: 10.5px; width: 200px; padding: 3px; direction: rtl; text-align: right;'>"
-            + "<b style='color: #ff5a00;'>📍 " + str(area_name) + "</b><br>"
-            + "<span style='color: #6c757d; font-size: 9.5px;'>منطقة عامة (غير مغطاة حالياً)</span>"
+            "<div style='font-family: Arial, sans-serif; font-size: 11px; width: 210px; padding: 4px; direction: rtl; text-align: right;'>"
+            + "<b style='color: #ff5a00; font-size: 12px;'>📍 " + str(area_name) + "</b><br>"
+            + "<span style='color: #6c757d; font-size: 10px;'>منطقة عامة (غير مغطاة حالياً)</span><br>"
+            + "<span style='color: #28a745; font-size: 9.5px; font-weight: bold;'>متاحة للإضافة لأي فرع عبر Vendor Portal</span>"
             + "</div>"
         )
     
@@ -790,7 +806,6 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     html += "</div>"
     return html
 
-# الدالة الفورية لالتقاط نقرة المضلع بدقة عالية وتفضيل الأصغر مساحة
 def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     if not mcd:
         return None, None
@@ -816,7 +831,7 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     return None, None
 
 # ==========================================
-# 5. شاشة تسجيل الدخول المطورة بهوية طلبات الأنيقة
+# 5. شاشة تسجيل الدخول
 # ==========================================
 init_users_db()
 init_requests_db()
@@ -826,7 +841,6 @@ if "logged_in" not in st.session_state:
     st.session_state["current_user"] = None
 
 if not st.session_state["logged_in"]:
-    # شريط علوي أنيق للغة والهوية
     top_c1, top_c2 = st.columns([8, 2])
     with top_c1:
         st.markdown("""
@@ -853,7 +867,6 @@ if not st.session_state["logged_in"]:
 
     st.markdown("<hr style='margin: 10px 0 25px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
 
-    # تقسيم الشاشة إلى عمودين: عمود يمثل ملخص الداشبورد وعمود يمثل بطاقة الدخول
     col_hero, col_card = st.columns([1.3, 1.0], gap="large")
 
     with col_hero:
@@ -868,7 +881,6 @@ if not st.session_state["logged_in"]:
         </div>
         """, unsafe_allow_html=True)
 
-        # بطاقات ملخص المؤشرات المدمجة (Dashboard KPI Preview)
         kpi_c1, kpi_c2, kpi_c3 = st.columns(3)
         with kpi_c1:
             st.markdown(f"""
@@ -993,6 +1005,30 @@ with st.sidebar:
     if is_admin:
         st.metric(T("🗺️ إجمالي المناطق الجغرافية", "Total Geographic Zones"), f"{len(gdf_areas):,}")
     
+    # ميزة رفع الشيت الجديد المحدث من البرنامج الأصلي مباشرة
+    st.markdown("---")
+    st.markdown(f"<b>📂 {T('تحديث شيت المضلعات الجديد', 'Update Polygons Sheet')}</b>", unsafe_allow_html=True)
+    uploaded_zones_file = st.file_uploader(
+        T("رفع ملف المناطق (CSV أو Excel):", "Upload Zones File (CSV / Excel):"),
+        type=["csv", "xlsx", "xls"],
+        key="uploader_custom_zones",
+        help=T("ارفع الشيت المسحوب من البرنامج الأصلي وسيقوم النظام بتحديث خريطة مصر بالكامل فوراً.", "Upload the latest export to immediately load all zones.")
+    )
+    if uploaded_zones_file is not None:
+        try:
+            if uploaded_zones_file.name.endswith(".csv"):
+                df_custom = pd.read_csv(uploaded_zones_file)
+            else:
+                df_custom = pd.read_excel(uploaded_zones_file)
+            new_gdf = process_areas_dataframe(df_custom)
+            if not new_gdf.empty:
+                gdf_areas = new_gdf
+                st.success(T(f"✅ تم تحميل {len(gdf_areas):,} منطقة بنجاح!", f"✅ Loaded {len(gdf_areas):,} zones!"))
+            else:
+                st.warning(T("⚠️ لم يتم العثور على عمود Polygon سليم في الملف.", "⚠️ No valid Polygon column found in file."))
+        except Exception as e:
+            st.error(f"خطأ أثناء قراءة الملف: {e}")
+
     if "last_sync_time" not in st.session_state:
         st.session_state["last_sync_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
         
@@ -1007,7 +1043,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي mahmoud.alaa.2@talabat.com
+# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1025,7 +1061,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (عرض 100% من مضلعات الجمهورية بدون نقص)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1234,38 +1270,37 @@ if is_admin:
                                 unsafe_allow_html=True
                             )
 
+                # ========================================================
+                # الحل الجذري: عرض كامل المضلعات (كرداسة، ناهيا، والمحافظات)
+                # ========================================================
                 gdf_areas_to_render = gpd.GeoDataFrame()
                 if not gdf_areas.empty:
-                    covered_names = set(zone_to_vendor_info.keys())
-                    covered_mask = gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(covered_names)
-                    covered_gdf = gdf_areas[covered_mask].copy()
-
-                    if not plot_vendors.empty:
-                        valid_coords = plot_vendors.dropna(subset=["lat", "lng"])
-                        if not valid_coords.empty and len(valid_coords) <= 350:
-                            minx, miny, maxx, maxy = valid_coords["lng"].min(), valid_coords["lat"].min(), valid_coords["lng"].max(), valid_coords["lat"].max()
-                            bbox = box(minx - 0.12, miny - 0.12, maxx + 0.12, maxy + 0.12)
-                            nearby_mask = gdf_areas.geometry.intersects(bbox)
-                            nearby_gdf = gdf_areas[nearby_mask].copy()
-                            gdf_areas_to_render = pd.concat([covered_gdf, nearby_gdf]).drop_duplicates(subset=["Delivery Location Area Name"])
-                        else:
-                            gdf_areas_to_render = covered_gdf
+                    # إذا تم اختيار محافظة محددة وفروعها، نركز المضلعات عليها، عدا ذلك نعرض شبكة الجمهورية كاملة بدون أي حذف
+                    if selected_cities and not plot_vendors.empty:
+                        minx, miny, maxx, maxy = plot_vendors["lng"].min(), plot_vendors["lat"].min(), plot_vendors["lng"].max(), plot_vendors["lat"].max()
+                        bbox = box(minx - 0.25, miny - 0.25, maxx + 0.25, maxy + 0.25)
+                        nearby_mask = gdf_areas.geometry.intersects(bbox)
+                        gdf_areas_to_render = gdf_areas[nearby_mask].copy()
+                        if gdf_areas_to_render.empty:
+                            gdf_areas_to_render = gdf_areas.copy()
                     else:
-                        gdf_areas_to_render = covered_gdf if not covered_gdf.empty else gdf_areas.head(80).copy()
+                        gdf_areas_to_render = gdf_areas.copy()
 
                 if not gdf_areas_to_render.empty:
                     gdf_areas_to_render = gdf_areas_to_render.sort_values(by="area_size", ascending=False)
                     def assign_zone_styling_and_popup(area_name):
                         z_clean = str(area_name).strip().lower()
+                        # إذا كانت المنطقة مغطاة بصيدلية حالية -> تأخذ لون الصيدلية وبيانات التوصيل
                         if z_clean in zone_to_vendor_info:
                             info_list = zone_to_vendor_info[z_clean]
                             primary_info = info_list[0]
-                            prim_hex = primary_info.get("hex", "#28a745")
+                            prim_hex = primary_info.get("hex", "#ff5a00")
                             card_html = build_zone_popup_card(area_name, info_list)
                             return prim_hex, prim_hex, 0.45, 2.0, card_html, True
                         
+                        # إذا كانت منطقة عامة مثل كرداسة أو ناهيا -> تظهر بمضلع محدد نظيف وجاهز للإضافة
                         card_html = build_zone_popup_card(area_name, [])
-                        return "#3388ff", "#002266", 0.08, 1.0, card_html, False
+                        return "#a0aec0", "#4a5568", 0.08, 1.2, card_html, False
 
                     props = gdf_areas_to_render["Delivery Location Area Name"].apply(assign_zone_styling_and_popup)
                     gdf_areas_to_render["fill_color"] = [p[0] for p in props]
@@ -1281,10 +1316,10 @@ if is_admin:
                     mean_lat = float(plot_vendors["lat"].mean())
                     mean_lng = float(plot_vendors["lng"].mean())
                     map_center = [mean_lat, mean_lng] if (pd.notna(mean_lat) and pd.notna(mean_lng)) else [30.0444, 31.2357]
-                    zoom_lvl = 12 if selected_chains else (10 if selected_cities else 7)
+                    zoom_lvl = 12 if selected_chains else (10 if selected_cities else 9)
                 else:
                     map_center = [30.0444, 31.2357]
-                    zoom_lvl = 7
+                    zoom_lvl = 8
 
                 m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
                 
@@ -1301,9 +1336,9 @@ if is_admin:
                         gdf_areas_to_render[["Delivery Location Area Name", "popup_html", "fill_color", "border_color", "fill_opacity", "weight", "geometry"]].to_json(),
                         name="Delivery Zones",
                         style_function=lambda feature: {
-                            "fillColor": feature["properties"].get("fill_color", "#3388ff"),
-                            "color": feature["properties"].get("border_color", "#002266"),
-                            "weight": feature["properties"].get("weight", 1.0),
+                            "fillColor": feature["properties"].get("fill_color", "#a0aec0"),
+                            "color": feature["properties"].get("border_color", "#4a5568"),
+                            "weight": feature["properties"].get("weight", 1.2),
                             "fillOpacity": feature["properties"].get("fill_opacity", 0.08)
                         },
                         highlight_function=lambda feature: {
@@ -1351,7 +1386,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التبديل الذكي للوضع + التحديد من أول كليك)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1493,7 +1528,7 @@ with tab2:
                             unsafe_allow_html=True
                         )
 
-            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
+            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 20, key="portal_radius_slider")
 
             all_chain_covered_zones = set()
             for v_id, z_dict in working_alloc.items():
@@ -1503,6 +1538,7 @@ with tab2:
             covered_mask = gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(all_chain_covered_zones) if not gdf_areas.empty else pd.Series(dtype=bool)
             covered_gdf = gdf_areas[covered_mask].copy() if not gdf_areas.empty else gpd.GeoDataFrame()
 
+            # إتاحة عرض كافة المناطق المحيطة بالفرع بما فيها كرداسة وناهيا
             if has_loc and not gdf_areas.empty:
                 valid_coords = vd.dropna(subset=["lat", "lng"])
                 if not valid_coords.empty:
@@ -1511,9 +1547,9 @@ with tab2:
                     nearby_gdf = gdf_areas[nearby_mask].copy()
                     pa = pd.concat([covered_gdf, nearby_gdf]).drop_duplicates(subset=["Delivery Location Area Name"])
                 else:
-                    pa = covered_gdf if not covered_gdf.empty else gdf_areas.head(50).copy()
+                    pa = gdf_areas.copy()
             else:
-                pa = covered_gdf if not covered_gdf.empty else (gdf_areas.head(50).copy() if not gdf_areas.empty else gpd.GeoDataFrame())
+                pa = gdf_areas.copy()
 
             if not pa.empty and "area_size" in pa.columns:
                 pa = pa.sort_values(by="area_size", ascending=False)
@@ -1720,7 +1756,7 @@ with tab2:
                             st.success(T(f"تم حفظ تعديل منطقة {selected_edit_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Saved {selected_edit_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 2. وضع إضافة منطقة لهذا الفرع
+                # 2. وضع إضافة منطقة لهذا الفرع (يدعم إضافة كرداسة وناهيا وكافة المحافظات)
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
@@ -1810,7 +1846,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول حصر التعديلات فقط مع حساب المسافة ووضع Edit
+            # جدول حصر التعديلات فقط
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
@@ -1940,7 +1976,7 @@ with tab2:
                         st.rerun()
 
 # ==========================================
-# Tab 3: Incoming Requests (صفحة الطلبات المجمعة والمحفوظة دائماً)
+# Tab 3: Incoming Requests
 # ==========================================
 if is_admin:
     with tab3:
@@ -1955,7 +1991,6 @@ if is_admin:
                 raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                 raw_df["Action"] = raw_df.get("Action", "").astype(str)
 
-                # تحديث السجلات لحظياً لحساب المسافة واستبدال نشط بـ Edit للمناطق المعدلة
                 for idx, r in raw_df.iterrows():
                     v_id_val = str(r["Vendor ID"]).strip()
                     z_val = str(r.get("Zone", "")).strip()
@@ -1970,7 +2005,6 @@ if is_admin:
                         raw_df.at[idx, "Action"] = "Edit"
                         raw_df.at[idx, "Final_Status"] = "Edit"
 
-                # فلاتر التصفية
                 f_c1, f_c2 = st.columns([1.5, 1.5])
                 with f_c1:
                     all_vn = [T("كل الفروع", "All Vendors")] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
@@ -1986,7 +2020,6 @@ if is_admin:
                     if f_vid != T("كل الأكواد", "All IDs"):
                         filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
 
-                    # تجميع الطلبات حسب كل إرسال (Vendor + Date)
                     summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
                         Total_Zones=("Zone", "count"),
                         Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط|Edit", case=False)).sum()),
@@ -2075,7 +2108,7 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع. (عند إرسال أي تعديل من Vendor Portal سيظهر هنا فوراً)", "📭 No incoming requests found. Submit modifications in Vendor Portal to view them here."))
 
 # ==========================================
-# Tab 4: Users Management (متاح حصرياً للأدمن الرئيسي mahmoud.alaa.2@talabat.com)
+# Tab 4: Users Management
 # ==========================================
 if is_master_admin:
     with tab4:
