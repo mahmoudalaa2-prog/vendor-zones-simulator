@@ -75,6 +75,7 @@ BRANCH_PALETTE = [
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
+MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
 REQUESTS_COLUMNS = [
     "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
@@ -84,7 +85,7 @@ REQUESTS_COLUMNS = [
 def init_users_db():
     if not os.path.exists(USERS_FILE):
         pd.DataFrame([{
-            "email": "mahmoud.alaa.2@talabat.com",
+            "email": MASTER_ADMIN_EMAIL,
             "password": "123456",
             "role": "admin",
             "access_type": "all",
@@ -95,7 +96,15 @@ def get_users_df():
     init_users_db()
     return pd.read_csv(USERS_FILE)
 
-def add_user(email, password, role, access_type="all", access_ids="all"):
+def check_is_master_admin(user_dict):
+    if not user_dict:
+        return False
+    return user_dict.get("email", "").strip().lower() == MASTER_ADMIN_EMAIL.lower()
+
+def add_user(email, password, role, access_type="all", access_ids="all", current_user_dict=None):
+    if not check_is_master_admin(current_user_dict):
+        return False, T("⛔ عذراً، إضافة المستخدمين مقتصرة حصرياً على الأدمن الرئيسي!", "⛔ Unauthorized: Only Master Admin can add users!")
+        
     df = get_users_df()
     email_clean = email.strip().lower()
     if email_clean in df["email"].str.lower().values:
@@ -111,23 +120,37 @@ def add_user(email, password, role, access_type="all", access_ids="all"):
     df.to_csv(USERS_FILE, index=False)
     return True, T("تم إنشاء الحساب بنجاح!", "User created successfully!")
 
-def update_user_permissions(email, role, access_type, access_ids, new_password=None):
+def update_user_permissions(email, role, access_type, access_ids, new_password=None, current_user_dict=None):
+    if not check_is_master_admin(current_user_dict):
+        return False, T("⛔ عذراً، تعديل الصلاحيات مقتصر حصرياً على الأدمن الرئيسي!", "⛔ Unauthorized: Only Master Admin can edit permissions!"), None
+        
     df = get_users_df()
     email_clean = email.strip().lower()
     idx = df[df["email"].str.lower() == email_clean].index
     if not idx.empty:
-        df.loc[idx, "role"] = role
-        df.loc[idx, "access_type"] = access_type
-        df.loc[idx, "access_ids"] = str(access_ids)
+        # حماية حساب الأدمن الرئيسي دائماً
+        if email_clean == MASTER_ADMIN_EMAIL.lower():
+            df.loc[idx, "role"] = "admin"
+            df.loc[idx, "access_type"] = "all"
+            df.loc[idx, "access_ids"] = "all"
+        else:
+            df.loc[idx, "role"] = role
+            df.loc[idx, "access_type"] = access_type
+            df.loc[idx, "access_ids"] = str(access_ids)
+            
         if new_password and str(new_password).strip():
             df.loc[idx, "password"] = str(new_password).strip()
+            
         df.to_csv(USERS_FILE, index=False)
         return True, T("تم تحديث البيانات وكلمة المرور بنجاح!", "User details and password updated successfully!"), df.iloc[idx[0]].to_dict()
     return False, T("المستخدم غير موجود.", "User not found."), None
 
-def delete_user(email):
+def delete_user(email, current_user_dict=None):
+    if not check_is_master_admin(current_user_dict):
+        return False, T("⛔ عذراً، حذف الحسابات مقتصر حصرياً على الأدمن الرئيسي!", "⛔ Unauthorized: Only Master Admin can delete users!")
+        
     df = get_users_df()
-    if email.strip().lower() == "mahmoud.alaa.2@talabat.com":
+    if email.strip().lower() == MASTER_ADMIN_EMAIL.lower():
         return False, T("لا يمكن حذف الأدمن الرئيسي!", "Cannot delete master admin!")
     df = df[df["email"].str.lower() != email.strip().lower()]
     df.to_csv(USERS_FILE, index=False)
@@ -476,7 +499,7 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                     c_perf = c_match.iloc[0].to_dict()
     return v_perf, c_perf
 
-# نظام حفظ الطلبات المزدوج لمنع اختفائها على الإطلاق
+# نظام حفظ الطلبات المزدوج
 def init_requests_db():
     if not os.path.exists(REQUESTS_FILE):
         pd.DataFrame(columns=REQUESTS_COLUMNS).to_csv(REQUESTS_FILE, index=False)
@@ -519,12 +542,10 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
         }
         new_records.append(row_dict)
         
-    # 1. الحفظ في الذاكرة الحية للجلسة (دائم ومستمر)
     if "session_requests_list" not in st.session_state:
         st.session_state["session_requests_list"] = []
     st.session_state["session_requests_list"].extend(new_records)
 
-    # 2. الحفظ في ملف القرص CSV
     try:
         save_df = pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
         save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
@@ -542,7 +563,6 @@ def get_all_requests_df():
 
     mem_records = st.session_state.get("session_requests_list", [])
     
-    # دمج وتفادي التكرار بدقة
     all_recs = []
     seen = set()
     for rec in (file_records + mem_records):
@@ -703,6 +723,7 @@ if not st.session_state["logged_in"]:
 
 current_user = st.session_state["current_user"]
 is_admin = current_user["role"] == "admin"
+is_master_admin = check_is_master_admin(current_user)
 
 user_vendors = get_user_vendors(current_user, df_vendors)
 total_user_branches = len(user_vendors) if not user_vendors.empty else 0
@@ -724,7 +745,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.write(f"👤 **{T('المستخدم', 'User')}:** `{current_user['email']}`")
-    st.write(f"🛡️ **{T('الصلاحية', 'Role')}:** `{current_user['role'].upper()}`")
+    role_badge = "👑 MASTER ADMIN" if is_master_admin else current_user['role'].upper()
+    st.write(f"🛡️ **{T('الصلاحية', 'Role')}:** `{role_badge}`")
     if current_user.get("access_type") != "all":
         st.write(f"📌 **{T('نطاق الربط', 'Scope')}:** `{current_user['access_type']}`")
     st.markdown("---")
@@ -756,12 +778,19 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-if is_admin:
+# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي mahmoud.alaa.2@talabat.com
+if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
         T("🛒 Vendor Portal", "🛒 Vendor Portal"),
         T("📥 Incoming Requests", "📥 Incoming Requests"),
-        T("👥 Users", "👥 Users")
+        T("👥 Users & Access", "👥 Users & Access")
+    ])
+elif is_admin:
+    tab1, tab2, tab3 = st.tabs([
+        T("🗺️ Overview Map", "🗺️ Overview Map"),
+        T("🛒 Vendor Portal", "🛒 Vendor Portal"),
+        T("📥 Incoming Requests", "📥 Incoming Requests")
     ])
 else:
     tab2 = st.container()
@@ -1207,7 +1236,6 @@ with tab2:
             working_alloc = st.session_state.get("portal_working_alloc", {})
             orig_alloc = st.session_state.get("portal_orig_alloc", {})
 
-            # قراءة الفرع النشط مبكراً لضبط تمركز الخريطة
             active_vid = st.session_state.get("portal_active_branch_select") or st.session_state.get("portal_active_vid") or (list(branch_names.keys())[0] if branch_names else "")
             if active_vid not in branch_names and branch_names:
                 active_vid = list(branch_names.keys())[0]
@@ -1238,7 +1266,6 @@ with tab2:
 
             rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
 
-            # استخراج مضلعات التغطية
             all_chain_covered_zones = set()
             for v_id, z_dict in working_alloc.items():
                 for z in z_dict:
@@ -1274,7 +1301,6 @@ with tab2:
                 st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
 
-                # التمركز التلقائي على الفرع المختار
                 active_row = vd[vd["clean_vid"] == active_vid]
                 if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
                     mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
@@ -1353,7 +1379,6 @@ with tab2:
                     returned_objects=["last_object_clicked"]
                 )
 
-                # الالتقاط المباشر من خصائص المضلع من أول كليك
                 clicked_zone, click_sig = extract_clicked_zone_direct(mcd, pa, all_known_zones)
                 if click_sig and click_sig != st.session_state.get("last_poly_click_sig"):
                     st.session_state["last_poly_click_sig"] = click_sig
@@ -1367,7 +1392,6 @@ with tab2:
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
-                # قائمة اختيار الفرع المستهدف للتعديل بجوار الخريطة مباشرة
                 if len(vd) > 1:
                     branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
                     branch_keys_list = list(branch_select_opts.keys())
@@ -1400,7 +1424,6 @@ with tab2:
                 active_zones_keys = sorted(list(active_branch_zones.keys()))
                 available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
 
-                # التبديل الذكي التلقائي للوضع بحسب تبعية المنطقة المنقورة
                 just_clicked = st.session_state.pop("just_clicked_map_zone", None)
                 if just_clicked:
                     if just_clicked in active_zones_keys:
@@ -1655,7 +1678,7 @@ with tab2:
                         key="portal_diff_editor"
                     )
 
-                    if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
+                    if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary"):
                         for v_id in diff_df["Vendor ID"].unique():
                             b_vname = diff_df[diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
                             branch_indices = diff_df[diff_df["Vendor ID"] == v_id].index
@@ -1695,7 +1718,6 @@ if is_admin:
         st.header(T("📥 طلبات التسعير والتغطية الواردة من الفروع", "📥 Vendor Pricing & Coverage Requests"))
         init_requests_db()
         
-        # قراءة آمنة تدمج بين الذاكرة والملف لضمان عدم ضياع أي طلب
         raw_df = get_all_requests_df()
         has_requests = not raw_df.empty and "Zone" in raw_df.columns
 
@@ -1729,94 +1751,94 @@ if is_admin:
                     all_vi = [T("كل الأكواد", "All IDs")] + sorted(subset_for_id["Vendor ID"].dropna().unique().tolist())
                     f_vid = st.selectbox(T("تصفية بكود الفرع:", "Filter by Vendor ID:"), all_vi, key="req_filter_id")
 
-                filtered_req = raw_df.copy()
-                if f_vname != T("كل الفروع", "All Vendors"):
-                    filtered_req = filtered_req[filtered_req["Vendor Name"] == f_vname]
-                if f_vid != T("كل الأكواد", "All IDs"):
-                    filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
+                    filtered_req = raw_df.copy()
+                    if f_vname != T("كل الفروع", "All Vendors"):
+                        filtered_req = filtered_req[filtered_req["Vendor Name"] == f_vname]
+                    if f_vid != T("كل الأكواد", "All IDs"):
+                        filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
 
-                # تجميع الطلبات حسب كل إرسال (Vendor + Date)
-                summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
-                    Total_Zones=("Zone", "count"),
-                    Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط|Edit", case=False)).sum()),
-                    Deact_Zones=("Action", lambda s: (s.str.contains("Deactivate|إلغاء", case=False)).sum()),
-                    Zones_Preview=("Zone", lambda s: ", ".join(s.head(3)) + ("..." if len(s) > 3 else ""))
-                ).reset_index()
+                    # تجميع الطلبات حسب كل إرسال (Vendor + Date)
+                    summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
+                        Total_Zones=("Zone", "count"),
+                        Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط|Edit", case=False)).sum()),
+                        Deact_Zones=("Action", lambda s: (s.str.contains("Deactivate|إلغاء", case=False)).sum()),
+                        Zones_Preview=("Zone", lambda s: ", ".join(s.head(3)) + ("..." if len(s) > 3 else ""))
+                    ).reset_index()
 
-                summary_df.rename(columns={
-                    "Date": T("تاريخ الإرسال", "Submission Date"),
-                    "Vendor ID": T("كود الفرع", "Vendor ID"),
-                    "Vendor Name": T("اسم الفرع", "Vendor Name"),
-                    "Total_Zones": T("إجمالي المناطق", "Total Zones"),
-                    "Active_Zones": T("المناطق النشطة والمعدلة", "Active & Edited Zones"),
-                    "Deact_Zones": T("المناطق الملغاة", "Deactivated Zones"),
-                    "Zones_Preview": T("معاينة المناطق", "Zones Overview (Preview)")
-                }, inplace=True)
+                    summary_df.rename(columns={
+                        "Date": T("تاريخ الإرسال", "Submission Date"),
+                        "Vendor ID": T("كود الفرع", "Vendor ID"),
+                        "Vendor Name": T("اسم الفرع", "Vendor Name"),
+                        "Total_Zones": T("إجمالي المناطق", "Total Zones"),
+                        "Active_Zones": T("المناطق النشطة والمعدلة", "Active & Edited Zones"),
+                        "Deact_Zones": T("المناطق الملغاة", "Deactivated Zones"),
+                        "Zones_Preview": T("معاينة المناطق", "Zones Overview (Preview)")
+                    }, inplace=True)
 
-                summary_df.insert(0, "Select", True)
+                    summary_df.insert(0, "Select", True)
 
-                st.write(T("📋 **حدد الطلبات المطلوبة من الجدول أدناه لتحميلها كملف أو استعراضها:**", "📋 **Select submissions from table below to download or view:**"))
+                    st.write(T("📋 **حدد الطلبات المطلوبة من الجدول أدناه لتحميلها كملف أو استعراضها:**", "📋 **Select submissions from table below to download or view:**"))
 
-                edited_summary = st.data_editor(
-                    summary_df,
-                    column_config={
-                        "Select": st.column_config.CheckboxColumn(T("تحديد", "Select"), default=True),
-                        T("تاريخ الإرسال", "Submission Date"): st.column_config.TextColumn(disabled=True),
-                        T("كود الفرع", "Vendor ID"): st.column_config.TextColumn(disabled=True),
-                        T("اسم الفرع", "Vendor Name"): st.column_config.TextColumn(disabled=True),
-                        T("إجمالي المناطق", "Total Zones"): st.column_config.NumberColumn(disabled=True),
-                        T("المناطق النشطة والمعدلة", "Active & Edited Zones"): st.column_config.NumberColumn(disabled=True),
-                        T("المناطق الملغاة", "Deactivated Zones"): st.column_config.NumberColumn(disabled=True),
-                        T("معاينة المناطق", "Zones Overview (Preview)"): st.column_config.TextColumn(disabled=True),
-                    },
-                    hide_index=True,
-                    use_container_width=True,
-                    key="requests_summary_editor"
-                )
+                    edited_summary = st.data_editor(
+                        summary_df,
+                        column_config={
+                            "Select": st.column_config.CheckboxColumn(T("تحديد", "Select"), default=True),
+                            T("تاريخ الإرسال", "Submission Date"): st.column_config.TextColumn(disabled=True),
+                            T("كود الفرع", "Vendor ID"): st.column_config.TextColumn(disabled=True),
+                            T("اسم الفرع", "Vendor Name"): st.column_config.TextColumn(disabled=True),
+                            T("إجمالي المناطق", "Total Zones"): st.column_config.NumberColumn(disabled=True),
+                            T("المناطق النشطة والمعدلة", "Active & Edited Zones"): st.column_config.NumberColumn(disabled=True),
+                            T("المناطق الملغاة", "Deactivated Zones"): st.column_config.NumberColumn(disabled=True),
+                            T("معاينة المناطق", "Zones Overview (Preview)"): st.column_config.TextColumn(disabled=True),
+                        },
+                        hide_index=True,
+                        use_container_width=True,
+                        key="requests_summary_editor"
+                    )
 
-                selected_rows = edited_summary[edited_summary["Select"] == True]
+                    selected_rows = edited_summary[edited_summary["Select"] == True]
 
-                col_d1, col_d2, col_d3 = st.columns([2, 1.5, 1])
+                    col_d1, col_d2, col_d3 = st.columns([2, 1.5, 1])
 
-                with col_d1:
-                    if not selected_rows.empty:
-                        sel_keys = set(zip(selected_rows[T("تاريخ الإرسال", "Submission Date")], selected_rows[T("كود الفرع", "Vendor ID")]))
-                        mask = [(d, str(v)) in sel_keys for d, v in zip(raw_df["Date"], raw_df["Vendor ID"])]
-                        download_df = raw_df[mask].copy()
+                    with col_d1:
+                        if not selected_rows.empty:
+                            sel_keys = set(zip(selected_rows[T("تاريخ الإرسال", "Submission Date")], selected_rows[T("كود الفرع", "Vendor ID")]))
+                            mask = [(d, str(v)) in sel_keys for d, v in zip(raw_df["Date"], raw_df["Vendor ID"])]
+                            download_df = raw_df[mask].copy()
 
-                        if len(selected_rows) == 1:
-                            vname_clean = re.sub(r'[^\w\s-]', '', str(selected_rows.iloc[0][T("اسم الفرع", "Vendor Name")]).strip()).replace(" ", "_")
-                            filename = f"Pricing_Request_{vname_clean}.csv"
+                            if len(selected_rows) == 1:
+                                vname_clean = re.sub(r'[^\w\s-]', '', str(selected_rows.iloc[0][T("اسم الفرع", "Vendor Name")]).strip()).replace(" ", "_")
+                                filename = f"Pricing_Request_{vname_clean}.csv"
+                            else:
+                                filename = f"Combined_Pricing_Requests_{len(selected_rows)}_Vendors.csv"
+
+                            csv_bytes = download_df.to_csv(index=False).encode('utf-8-sig')
+                            st.download_button(
+                                T(f"📥 تحميل ملف CSV مفصل ({len(download_df)} منطقة)", f"📥 Download Detailed CSV ({len(download_df)} zones)"),
+                                data=csv_bytes,
+                                file_name=filename,
+                                mime="text/csv",
+                                type="primary",
+                                use_container_width=True
+                            )
                         else:
-                            filename = f"Combined_Pricing_Requests_{len(selected_rows)}_Vendors.csv"
+                            st.warning(T("يرجى تحديد طلب واحد على الأقل للتحميل.", "Please select at least one request to download."))
 
-                        csv_bytes = download_df.to_csv(index=False).encode('utf-8-sig')
-                        st.download_button(
-                            T(f"📥 تحميل ملف CSV مفصل ({len(download_df)} منطقة)", f"📥 Download Detailed CSV ({len(download_df)} zones)"),
-                            data=csv_bytes,
-                            file_name=filename,
-                            mime="text/csv",
-                            type="primary",
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning(T("يرجى تحديد طلب واحد على الأقل للتحميل.", "Please select at least one request to download."))
+                    with col_d2:
+                        show_details = st.checkbox(T("👁️ استعراض تفاصيل المناطق المسجلة", "👁️ View Detailed Zones Table"), value=True)
 
-                with col_d2:
-                    show_details = st.checkbox(T("👁️ استعراض تفاصيل المناطق المسجلة", "👁️ View Detailed Zones Table"), value=True)
+                    with col_d3:
+                        if st.button(T("🗑️ مسح السجلات", "🗑️ Clear Records"), type="secondary", use_container_width=True):
+                            st.session_state["session_requests_list"] = []
+                            if os.path.exists(REQUESTS_FILE):
+                                os.remove(REQUESTS_FILE)
+                            init_requests_db()
+                            st.rerun()
 
-                with col_d3:
-                    if st.button(T("🗑️ مسح السجلات", "🗑️ Clear Records"), type="secondary", use_container_width=True):
-                        st.session_state["session_requests_list"] = []
-                        if os.path.exists(REQUESTS_FILE):
-                            os.remove(REQUESTS_FILE)
-                        init_requests_db()
-                        st.rerun()
-
-                if show_details and not selected_rows.empty:
-                    st.markdown("---")
-                    st.subheader(T("🔍 جدول تفاصيل المناطق للطلبات المحددة", "🔍 Detailed Zones for Selected Requests"))
-                    st.dataframe(download_df, hide_index=True, use_container_width=True)
+                    if show_details and not selected_rows.empty:
+                        st.markdown("---")
+                        st.subheader(T("🔍 جدول تفاصيل المناطق للطلبات المحددة", "🔍 Detailed Zones for Selected Requests"))
+                        st.dataframe(download_df, hide_index=True, use_container_width=True)
             except Exception as e:
                 st.error(f"حدث خطأ أثناء قراءة الطلبات: {e}")
 
@@ -1824,11 +1846,13 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع. (عند إرسال أي تعديل من Vendor Portal سيظهر هنا فوراً)", "📭 No incoming requests found. Submit modifications in Vendor Portal to view them here."))
 
 # ==========================================
-# Tab 4: Users Management
+# Tab 4: Users Management (متاح حصرياً للأدمن الرئيسي mahmoud.alaa.2@talabat.com)
 # ==========================================
-if is_admin:
+if is_master_admin:
     with tab4:
-        st.header(T("👥 إدارة المستخدمين والصلاحيات", "👥 User Management & Permissions"))
+        st.header(T("👥 إدارة المستخدمين والصلاحيات (الأدمن الرئيسي)", "👥 User Management & Permissions (Master Admin Only)"))
+        st.caption(T(f"🔒 صلاحية الوصول لهذه الشاشة محصورة ببريد: `{MASTER_ADMIN_EMAIL}`", f"🔒 Access strictly restricted to: `{MASTER_ADMIN_EMAIL}`"))
+        
         tab_u1, tab_u2, tab_u3 = st.tabs([
             T("➕ إضافة مستخدم جديد", "➕ Add New User"),
             T("✏️ تعديل صلاحيات وكلمة مرور مستخدم", "✏️ Edit Permissions & Password"),
@@ -1867,7 +1891,7 @@ if is_admin:
                     elif ("Chain" in access_choice or "Vendor" in access_choice) and not selected_access_ids_str:
                         st.error(T("يرجى اختيار فرع أو سلسلة واحدة على الأقل.", "Please select at least one branch or chain."))
                     else:
-                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str)
+                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
                         if ok: st.success(msg); st.rerun()
                         else: st.error(msg)
 
@@ -1920,7 +1944,7 @@ if is_admin:
                     else: e_selected_access_ids_str = ""
                     
                 if st.form_submit_button(T("💾 حفظ التعديلات وتحديث كلمة المرور", "💾 Save Changes & Password"), type="primary"):
-                    ok, msg, updated_row = update_user_permissions(selected_edit_user, e_role, e_access_type, e_selected_access_ids_str, edit_password_val)
+                    ok, msg, updated_row = update_user_permissions(selected_edit_user, e_role, e_access_type, e_selected_access_ids_str, edit_password_val, current_user_dict=current_user)
                     if ok:
                         if selected_edit_user.lower() == current_user["email"].lower():
                             st.session_state["current_user"] = updated_row
@@ -1934,10 +1958,10 @@ if is_admin:
                 display_users_df["password"] = "••••••••"
             st.dataframe(display_users_df, use_container_width=True)
             
-            deletable = users_list_df[users_list_df["email"].str.lower() != "mahmoud.alaa.2@talabat.com"]["email"].tolist()
+            deletable = users_list_df[users_list_df["email"].str.lower() != MASTER_ADMIN_EMAIL.lower()]["email"].tolist()
             if deletable:
                 to_del = st.selectbox(T("اختر المستخدم للحذف:", "Select User to Delete:"), deletable)
                 if st.button(T("حذف الحساب نهائياً", "Delete User"), type="secondary"):
-                    ok, msg = delete_user(to_del)
+                    ok, msg = delete_user(to_del, current_user_dict=current_user)
                     if ok: st.success(msg); st.rerun()
                     else: st.error(msg)
