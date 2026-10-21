@@ -14,24 +14,143 @@ import requests
 from datetime import datetime
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم واللغة
+# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات الكاملة
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
 st.markdown("""
 <style>
+/* ==========================================================
+   TALABAT BRANDING THEME (ORANGE & SLEEK MODERN DASHBOARD UI)
+   ========================================================== */
+
+/* 1. كروت مؤشرات الأداء (Metrics) بهوية طلبات البرتقالية */
+div[data-testid="stMetric"] {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border: 1px solid rgba(255, 90, 0, 0.22) !important;
+    border-top: 3.5px solid #ff5a00 !important;
+    border-radius: 12px !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15) !important;
+    transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+}
+div[data-testid="stMetric"]:hover {
+    border-color: rgba(255, 90, 0, 0.5) !important;
+    box-shadow: 0 6px 20px rgba(255, 90, 0, 0.2) !important;
+}
 div[data-testid="stMetricValue"] {
-    font-size: 21px !important;
-    font-weight: 700 !important;
+    font-size: 22px !important;
+    font-weight: 800 !important;
+    color: #ff5a00 !important;
 }
 div[data-testid="stMetricLabel"] {
     font-size: 13px !important;
+    color: #c9d1d9 !important;
+    font-weight: 600 !important;
 }
 div[data-testid="stMetricDelta"] {
     font-size: 12px !important;
 }
 
-/* بطاقة تسجيل الدخول الاحترافية المتوافقة مع هوية الداشبورد */
+/* 2. أزرار طلبات البرتقالية الأساسية والثانوية */
+button[kind="primary"], .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 9px !important;
+    font-weight: 700 !important;
+    padding: 8px 18px !important;
+    box-shadow: 0 4px 14px rgba(255, 90, 0, 0.35) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #e04f00 0%, #ff5a00 100%) !important;
+    box-shadow: 0 6px 20px rgba(255, 90, 0, 0.5) !important;
+    transform: translateY(-1px);
+}
+button[kind="secondary"], .stButton > button[kind="secondary"] {
+    border: 1px solid rgba(255, 90, 0, 0.4) !important;
+    border-radius: 9px !important;
+    color: #e2e8f0 !important;
+    transition: all 0.2s ease-in-out !important;
+}
+button[kind="secondary"]:hover, .stButton > button[kind="secondary"]:hover {
+    border-color: #ff5a00 !important;
+    color: #ff5a00 !important;
+    background: rgba(255, 90, 0, 0.08) !important;
+}
+
+/* 3. تبويبات الداشبورد العلوية (Tabs) */
+button[data-baseweb="tab"] {
+    font-size: 14.5px !important;
+    font-weight: 600 !important;
+    color: #8b949e !important;
+    border-radius: 8px 8px 0 0 !important;
+    padding: 10px 18px !important;
+    transition: all 0.2s ease-in-out !important;
+}
+button[data-baseweb="tab"]:hover {
+    color: #ff8a00 !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #ff5a00 !important;
+    font-weight: 800 !important;
+    border-bottom: 3.5px solid #ff5a00 !important;
+    background: rgba(255, 90, 0, 0.08) !important;
+}
+div[data-baseweb="tab-highlight"] {
+    background-color: #ff5a00 !important;
+}
+div[data-baseweb="tab-border"] {
+    background-color: rgba(255, 90, 0, 0.2) !important;
+}
+
+/* 4. القائمة الجانبية (Sidebar) */
+section[data-testid="stSidebar"] {
+    border-left: 1px solid rgba(255, 90, 0, 0.2) !important;
+    border-right: 1px solid rgba(255, 90, 0, 0.2) !important;
+    background: linear-gradient(180deg, rgba(255, 90, 0, 0.06) 0%, rgba(14, 17, 23, 0) 100%) !important;
+}
+
+/* 5. العناوين الرئيسية والفواصل */
+h2 {
+    border-bottom: 2px solid rgba(255, 90, 0, 0.3) !important;
+    padding-bottom: 8px !important;
+    margin-bottom: 16px !important;
+}
+
+/* 6. عناصر الإدخال، الاختيار والقوائم */
+div[data-baseweb="input"]:focus-within,
+div[data-baseweb="select"]:focus-within {
+    border-color: #ff5a00 !important;
+    box-shadow: 0 0 0 1px #ff5a00 !important;
+}
+span[data-baseweb="tag"] {
+    background-color: rgba(255, 90, 0, 0.16) !important;
+    color: #ff5a00 !important;
+    border: 1px solid rgba(255, 90, 0, 0.4) !important;
+    border-radius: 6px !important;
+}
+div[data-baseweb="radio"] div[aria-checked="true"] {
+    background-color: #ff5a00 !important;
+    border-color: #ff5a00 !important;
+}
+div[data-baseweb="checkbox"] div[aria-checked="true"] {
+    background-color: #ff5a00 !important;
+    border-color: #ff5a00 !important;
+}
+div[data-baseweb="slider"] div[role="slider"] {
+    background-color: #ff5a00 !important;
+    border-color: #ff5a00 !important;
+}
+div[data-baseweb="slider"] div[data-testid="stSliderTickBar"] {
+    background-color: #ff5a00 !important;
+}
+div[data-testid="stToggleSwitch"] input:checked + div {
+    background-color: #ff5a00 !important;
+}
+
+/* 7. بطاقة تسجيل الدخول */
 form[data-testid="stForm"] {
     border: 1px solid rgba(255, 90, 0, 0.3) !important;
     border-top: 4px solid #ff5a00 !important;
@@ -42,7 +161,7 @@ form[data-testid="stForm"] {
     box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35) !important;
 }
 
-/* ضبط حجم النوافذ المنبثقة على الخريطة لتكون مدمجة وتدعم التمرير */
+/* 8. نوافذ الخريطة المنبثقة */
 .leaflet-popup-content-wrapper {
     border-radius: 8px !important;
     padding: 2px !important;
@@ -589,7 +708,7 @@ def build_zone_popup_card(area_name, info_list):
     if not info_list:
         return (
             "<div style='font-family: Arial, sans-serif; font-size: 10.5px; width: 200px; padding: 3px; direction: rtl; text-align: right;'>"
-            + "<b style='color: #0d6efd;'>📍 " + str(area_name) + "</b><br>"
+            + "<b style='color: #ff5a00;'>📍 " + str(area_name) + "</b><br>"
             + "<span style='color: #6c757d; font-size: 9.5px;'>منطقة عامة (غير مغطاة حالياً)</span>"
             + "</div>"
         )
@@ -597,8 +716,8 @@ def build_zone_popup_card(area_name, info_list):
     branch_count = len(info_list)
     parts = [
         "<div style='font-family: Arial, sans-serif; width: 255px; max-height: 175px; overflow-y: auto; padding: 2px; direction: rtl; text-align: right;'>",
-        "<div style='position: sticky; top: 0; background: #ffffff; padding-bottom: 3px; border-bottom: 1.5px solid #0d6efd; margin-bottom: 4px; z-index: 10;'>",
-        "<b style='color: #0d6efd; font-size: 11.5px;'>📍 " + str(area_name) + "</b> <span style='color: #198754; font-size: 9.5px; font-weight: bold;'>(" + str(branch_count) + " فروع)</span>",
+        "<div style='position: sticky; top: 0; background: #ffffff; padding-bottom: 3px; border-bottom: 1.5px solid #ff5a00; margin-bottom: 4px; z-index: 10;'>",
+        "<b style='color: #ff5a00; font-size: 11.5px;'>📍 " + str(area_name) + "</b> <span style='color: #198754; font-size: 9.5px; font-weight: bold;'>(" + str(branch_count) + " فروع)</span>",
         "</div>",
         "<div style='display: flex; flex-direction: column; gap: 3px;'>"
     ]
@@ -636,7 +755,7 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
         match_d = df_delivery[df_delivery["clean_vid"] == v_id]
 
     html = f"""<div style='font-family: Arial, sans-serif; width: 280px; font-size: 11px;'>
-<h4 style='margin:0 0 4px 0; color:#0d6efd; font-size: 12.5px;'>💊 {v_name}</h4>
+<h4 style='margin:0 0 4px 0; color:#ff5a00; font-size: 12.5px;'>💊 {v_name}</h4>
 <b>Vendor ID:</b> <code>{v_id}</code> | <b>Chain:</b> {c_name} (<code>{c_id}</code>)<br>
 <b>{T("المدينة", "City")}:</b> {v_city} | <b>AM:</b> <b>{v_am}</b><br>
 <b>{T("الحالة", "Status")}:</b> {status_badge}{hidden_badge}<br>
@@ -644,7 +763,7 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
 
     if v_perf:
         html += f"""<div style='background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; padding:5px; margin-bottom:5px;'>
-<b style='color:#0d6efd; font-size: 11px;'>📊 {T("مؤشرات الأداء", "Performance")}:</b>
+<b style='color:#ff5a00; font-size: 11px;'>📊 {T("مؤشرات الأداء", "Performance")}:</b>
 <table style='width:100%; font-size:10.5px; margin-top:2px;'>
 <tr><td><b>QC Net Orders:</b></td><td style='text-align:right;'><b>{v_perf.get('qc_orders', '-')}</b></td></tr>
 <tr><td><b>Failed Orders:</b></td><td style='text-align:right;'>{v_perf.get('fail_orders', '-')} ({v_perf.get('fail_rate', '-')})</td></tr>
@@ -697,7 +816,7 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     return None, None
 
 # ==========================================
-# 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
+# 5. شاشة تسجيل الدخول المطورة بهوية طلبات الأنيقة
 # ==========================================
 init_users_db()
 init_requests_db()
@@ -734,7 +853,7 @@ if not st.session_state["logged_in"]:
 
     st.markdown("<hr style='margin: 10px 0 25px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
 
-    # تقسيم الشاشة إلى عمودين: عمود يمثل ملخص الداشبورد والعمليات، وعمود يمثل بطاقة الدخول
+    # تقسيم الشاشة إلى عمودين: عمود يمثل ملخص الداشبورد وعمود يمثل بطاقة الدخول
     col_hero, col_card = st.columns([1.3, 1.0], gap="large")
 
     with col_hero:
@@ -743,13 +862,9 @@ if not st.session_state["logged_in"]:
             <div style="display: inline-block; background: rgba(255, 90, 0, 0.15); color: #ff5a00; border: 1px solid rgba(255, 90, 0, 0.3); padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; margin-bottom: 12px;">
                 ⚡ {T("المنصة الموحدة لمحاكاة العمليات والتسعير", "Unified Logistics & Pricing Engine")}
             </div>
-            <h1 style="font-size: 32px; font-weight: 900; line-height: 1.25; margin-bottom: 15px; color: #ffffff;">
+            <h1 style="font-size: 32px; font-weight: 900; line-height: 1.25; margin-bottom: 24px; color: #ffffff;">
                 {T("لوحة تحكم الصيدليات ومناطق التغطية الجغرافية", "Pharmacy Operations & Zones Management Dashboard")}
             </h1>
-            <p style="font-size: 14.5px; color: #8b949e; line-height: 1.6; margin-bottom: 25px;">
-                {T("نظام متكامل يربط بين مديري الحسابات (AMs)، فروع الصيدليات، والمضلعات الجغرافية الحية لتحديد نطاق التوصيل، إدارة وتوثيق الرسوم، وحساب المسافات الفعلية بدقة فائقة.",
-                   "An enterprise operations hub bridging Account Managers, pharmacy branches, and live geographic polygons to manage coverage areas, calibrate fees, and calculate actual branch distances.")}
-            </p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -757,35 +872,28 @@ if not st.session_state["logged_in"]:
         kpi_c1, kpi_c2, kpi_c3 = st.columns(3)
         with kpi_c1:
             st.markdown(f"""
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 14px 12px; text-align: center;">
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff5a00; border-radius: 12px; padding: 16px 12px; text-align: center;">
                 <div style="font-size: 22px; font-weight: 900; color: #ff5a00;">1,200+</div>
-                <div style="font-size: 11.5px; font-weight: 600; color: #c9d1d9; margin-top: 2px;">{T("مضلع جغرافي", "Geospatial Zones")}</div>
-                <div style="font-size: 10px; color: #8b949e;">{T("خرائط دقيقة لحظية", "Polygons simulator")}</div>
+                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("مضلع جغرافي", "Geospatial Zones")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("خرائط دقيقة لحظية", "Polygons simulator")}</div>
             </div>
             """, unsafe_allow_html=True)
         with kpi_c2:
             st.markdown(f"""
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 14px 12px; text-align: center;">
-                <div style="font-size: 22px; font-weight: 900; color: #2ea043;">400+</div>
-                <div style="font-size: 11.5px; font-weight: 600; color: #c9d1d9; margin-top: 2px;">{T("فرع وسلسلة صيدليات", "Pharmacy Branches")}</div>
-                <div style="font-size: 10px; color: #8b949e;">{T("تغطية شاملة للمحافظات", "Nationwide coverage")}</div>
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #28a745; border-radius: 12px; padding: 16px 12px; text-align: center;">
+                <div style="font-size: 22px; font-weight: 900; color: #28a745;">400+</div>
+                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("فرع وسلسلة صيدليات", "Pharmacy Branches")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تغطية شاملة للمحافظات", "Nationwide coverage")}</div>
             </div>
             """, unsafe_allow_html=True)
         with kpi_c3:
             st.markdown(f"""
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 14px 12px; text-align: center;">
-                <div style="font-size: 22px; font-weight: 900; color: #58a6ff;">Live GPS</div>
-                <div style="font-size: 11.5px; font-weight: 600; color: #c9d1d9; margin-top: 2px;">{T("حساب المسافات بدقة", "Distance Engine")}</div>
-                <div style="font-size: 10px; color: #8b949e;">{T("تعديل فوري وسريع", "Haversine & Edit tag")}</div>
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff7700; border-radius: 12px; padding: 16px 12px; text-align: center;">
+                <div style="font-size: 22px; font-weight: 900; color: #ff7700;">Live GPS</div>
+                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("حساب المسافات بدقة", "Distance Engine")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تعديل فوري وسريع", "Haversine & Edit tag")}</div>
             </div>
             """, unsafe_allow_html=True)
-
-        st.write("")
-        st.markdown(f"""
-        <div style="background: rgba(255, 90, 0, 0.05); border-left: 3px solid #ff5a00; border-radius: 6px; padding: 10px 14px; font-size: 11.5px; color: #8b949e; line-height: 1.5;">
-            💡 <b>{T("ميزة النظام الذكي:", "Key Operational Advantage:")}</b> {T("تحديد المناطق بالماوس مباشرة من الخريطة، والتوجيه التلقائي بين الإضافة والتعديل للمناطق مع الاحتفاظ الكامل بسجل الطلبات.", "Click any zone directly on the map for automated add/edit detection with persistent requests storage.")}
-        </div>
-        """, unsafe_allow_html=True)
 
     with col_card:
         with st.form("login_form"):
@@ -1183,7 +1291,7 @@ if is_admin:
                 map_custom_css = (
                     "<style>"
                     ".leaflet-interactive:focus {outline: none !important;}"
-                    "path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}"
+                    "path.leaflet-interactive:hover {cursor: pointer; stroke: #ff5a00 !important; stroke-width: 3.5px !important;}"
                     "</style>"
                 )
                 m_admin.get_root().html.add_child(folium.Element(map_custom_css))
@@ -1199,7 +1307,7 @@ if is_admin:
                             "fillOpacity": feature["properties"].get("fill_opacity", 0.08)
                         },
                         highlight_function=lambda feature: {
-                            "color": "#ffc107",
+                            "color": "#ff5a00",
                             "weight": 3.5,
                             "fillOpacity": 0.65
                         },
@@ -1376,7 +1484,7 @@ with tab2:
                         is_active_card = (b_vid == active_vid)
                         border_highlight = f"3px solid {b_info['hex']}" if is_active_card else "1px solid #dee2e6"
                         bg_highlight = "#e8f4fd" if is_active_card else "#f8f9fa"
-                        badge_tag = "<b style='color:#0d6efd;'>🎯 الفرع المحدد</b><br>" if is_active_card else "<br>"
+                        badge_tag = "<b style='color:#ff5a00;'>🎯 الفرع المحدد</b><br>" if is_active_card else "<br>"
                         st.markdown(
                             f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 6px solid {b_info['hex']}; border: {border_highlight}; background: {bg_highlight}; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
                             f"<b>{b_info['name']}</b> ({zone_count} منطقة){badge_tag}"
@@ -1443,7 +1551,7 @@ with tab2:
                         
                         target_tag = '<span style="color: red; font-weight: bold;">(🎯 الفرع المحدد حالياً للتعديل)</span>' if is_active_b else ''
                         popup_html = f"""<div style='font-family: Arial, sans-serif; font-size: 11px; width: 210px;'>
-                        <b style='color: #0d6efd;'>💊 {rv['clean_name']}</b><br>
+                        <b style='color: #ff5a00;'>💊 {rv['clean_name']}</b><br>
                         <b>Vendor ID:</b> <code>{b_id_str}</code><br>
                         <b>{T('المناطق المغطاة', 'Covered Zones')}:</b> {len(working_alloc.get(b_id_str, {}))}<br>
                         {target_tag}
@@ -1456,7 +1564,7 @@ with tab2:
                             icon=folium.Icon(color="red" if is_active_b else b_info.get("folium", "green"), icon="medkit", prefix="fa")
                         ).add_to(vmap)
 
-                vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ffc107 !important; stroke-width:3.5px !important; cursor:pointer;}</style>"))
+                vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ff5a00 !important; stroke-width:3.5px !important; cursor:pointer;}</style>"))
 
                 selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
 
@@ -1471,16 +1579,16 @@ with tab2:
                             is_active_owner = (owner_vid == active_vid)
                             
                             return {
-                                "fillColor": "#ffc107" if is_clicked_target else b_hex,
+                                "fillColor": "#ff5a00" if is_clicked_target else b_hex,
                                 "color": "#000000" if is_clicked_target else b_hex,
                                 "weight": 4.5 if is_clicked_target else (3.0 if is_active_owner else 1.2),
-                                "fillOpacity": 0.8 if is_clicked_target else (0.6 if is_active_owner else 0.3)
+                                "fillOpacity": 0.85 if is_clicked_target else (0.6 if is_active_owner else 0.3)
                             }
                         return {
-                            "fillColor": "#ffc107" if is_clicked_target else "#3388ff",
-                            "color": "#000000" if is_clicked_target else "#002266",
+                            "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
+                            "color": "#000000" if is_clicked_target else "#4a5568",
                             "weight": 3.5 if is_clicked_target else 1.0,
-                            "fillOpacity": 0.65 if is_clicked_target else 0.08
+                            "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
 
                     folium.GeoJson(
@@ -1532,7 +1640,7 @@ with tab2:
                 else:
                     st.markdown(
                         f"<div style='border-left: 5px solid {active_branch_color}; background: #fdfdfd; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px;'>"
-                        f"<b>🎯 الفرع المسؤول:</b> <span style='color:#0d6efd;'>{active_branch_name}</span> (ID: <code>{active_vid}</code>)"
+                        f"<b>🎯 الفرع المسؤول:</b> <span style='color:#ff5a00;'>{active_branch_name}</span> (ID: <code>{active_vid}</code>)"
                         f"</div>",
                         unsafe_allow_html=True
                     )
