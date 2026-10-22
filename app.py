@@ -97,6 +97,9 @@ BRANCH_PALETTE = [
     {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
 ]
 
+# خيارات وقت التوصيل المتاحة (بين 20 و 60 دقيقة فقط)
+DELIVERY_TIME_CHOICES = ["20 mins", "25 mins", "30 mins", "35 mins", "40 mins", "45 mins", "50 mins", "55 mins", "60 mins"]
+
 # ==========================================
 # 2. إدارة المستخدمين وقاعدة البيانات وإعدادات البريد
 # ==========================================
@@ -107,7 +110,7 @@ MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
 REQUESTS_COLUMNS = [
     "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
-    "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Final_Status", "Status"
+    "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Minimum Order Amount", "Final_Status", "Status"
 ]
 
 def load_smtp_config():
@@ -478,12 +481,14 @@ def load_data():
         d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone", "Zone Name"])
         d_time_col = robust_get_col(df_d, ["Delivery Time", "Time", "Duration"])
         d_fee_col = robust_get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
+        d_min_col = robust_get_col(df_d, ["Minimum Amount", "Minimum Order", "Min Order", "Min Amount", "الحد الادنى", "الحد الأدنى"])
 
         df_d["clean_vid"] = df_d[d_vid_col].apply(normalize_id) if d_vid_col else ""
         df_d["clean_cid"] = df_d[d_cid_col].apply(normalize_id) if d_cid_col else ""
         df_d["clean_zone"] = df_d[d_zone_col].astype(str).str.strip() if d_zone_col else ""
         df_d["clean_time"] = df_d[d_time_col].astype(str).str.strip() if d_time_col else ""
         df_d["clean_fee"] = df_d[d_fee_col].astype(str).str.strip() if d_fee_col else ""
+        df_d["clean_min_order"] = df_d[d_min_col].astype(str).str.strip() if d_min_col else "0.0"
 
         mask_charity = df_d["clean_zone"].str.contains(r"charit|charities", case=False, na=False)
         df_d = df_d[~mask_charity].copy()
@@ -632,6 +637,10 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
         fee_val = r.get("Delivery Fees") or r.get("Delivery Fees (EGP)") or r.get("Fees") or 25.0
         try: fee_val = float(fee_val)
         except: fee_val = 25.0
+
+        min_val = r.get("Minimum Order Amount") or r.get("Minimum Amount") or r.get("Minimum Order (EGP)") or 0.0
+        try: min_val = float(min_val)
+        except: min_val = 0.0
         
         final_status = str(r.get("Final_Status", "Active (Existing)")).strip()
         
@@ -645,6 +654,7 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
             "Distance (km)": dist_val,
             "Delivery Time": d_time,
             "Delivery Fees": fee_val,
+            "Minimum Order Amount": min_val,
             "Final_Status": final_status,
             "Status": "Pending"
         }
@@ -743,12 +753,12 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                     <table class="table">
                         <tr><th>Total Zones in Request</th><td><b>{total_count}</b> zones</td></tr>
                         <tr><th>Newly Added Zones</th><td style="color:#16a34a; font-weight:bold;">+{add_count}</td></tr>
-                        <tr><th>Updated Zones (Fee / SLA)</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
+                        <tr><th>Updated Zones (Fee / SLA / Min Order)</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
                         <tr><th>Deactivated Zones</th><td style="color:#dc2626; font-weight:bold;">-{deact_count}</td></tr>
                     </table>
 
                     <div class="notice">
-                        📎 <b>Attachment:</b> Complete Excel workbook <code>{filename}</code> is attached containing exact polygon coordinates, computed distance (km), delivery fees, and SLAs.
+                        📎 <b>Attachment:</b> Complete Excel workbook <code>{filename}</code> is attached containing exact polygon coordinates, computed distance (km), delivery fees, delivery SLAs, and Minimum Order Amount.
                     </div>
 
                     <p style="font-size: 13px; color: #64748b;">
@@ -809,7 +819,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                     </div>
                     <div class="content">
                         <p style="font-size: 15px; margin-top: 0;">عزيزنا شريك النجاح / <b>فريق {vendor_name}</b>،</p>
-                        <p>نشكركم على استخدام بوابة الفيندور. نود إحاطتكم بأنه تم استلام وتوثيق طلب تعديل مناطق التغطية وأسعار التوصيل الخاصة بكم بنجاح، وجارٍ مراجعته وتدقيقه من قبل فريق العمليات واللوجستيات.</p>
+                        <p>نشكركم على استخدام بوابة الفيندور. نود إحاطتكم بأنه تم استلام وتوثيق طلب تعديل مناطق التغطية وأسعار التوصيل والحد الأدنى للطلب بنجاح، وجارٍ مراجعته وتدقيقه من قبل فريق العمليات واللوجستيات.</p>
                         
                         <div class="box">
                             <div style="font-size: 16px; font-weight: 800; color: #15803d;">🏬 {vendor_name}</div>
@@ -821,12 +831,12 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                         <table class="table">
                             <tr><th>إجمالي المناطق في الطلب</th><td><b>{total_count}</b> مناطق</td></tr>
                             <tr><th>مناطق جديدة مضافة</th><td style="color:#16a34a; font-weight:bold;">+{add_count} منطقة</td></tr>
-                            <tr><th>مناطق تم تعديل سعرها أو وقتها</th><td style="color:#ea580c; font-weight:bold;">{edit_count} منطقة</td></tr>
+                            <tr><th>مناطق تم تعديل سعرها أو وقتها أو حدها الأدنى</th><td style="color:#ea580c; font-weight:bold;">{edit_count} منطقة</td></tr>
                             <tr><th>مناطق ملغاة التفعيل</th><td style="color:#dc2626; font-weight:bold;">-{deact_count} منطقة</td></tr>
                         </table>
 
                         <div class="notice">
-                            📎 <b>نسخة من طلبكم:</b> مرفق بهذه الرسالة ملف إكسيل كامل <code>{filename}</code> يتضمن كافة تفاصيل المناطق التي قمتم بتعديلها مع المسافات المحسوبة وأوقات ورسوم التوصيل المقترحة للاحتفاظ بها في سجلاتكم.
+                            📎 <b>نسخة من طلبكم:</b> مرفق بهذه الرسالة ملف إكسيل كامل <code>{filename}</code> يتضمن كافة تفاصيل المناطق التي قمتم بتعديلها مع المسافات المحسوبة وأوقات ورسوم التوصيل والحد الأدنى للطلب المقترح للاحتفاظ بها في سجلاتكم.
                         </div>
 
                         <p style="font-size: 13px; color: #64748b;">
@@ -909,10 +919,11 @@ def build_zone_popup_card(area_name, info_list):
         b_hex = b.get("hex", "#28a745")
         b_time = b.get("time", "-")
         b_fee = b.get("fee", "-")
+        b_min = b.get("min_order", "-")
         parts.append(
             "<div style='border-right: 3px solid " + str(b_hex) + "; padding: 2px 5px; background: #f8f9fa; border-radius: 3px; font-size: 10px; line-height: 1.25;'>"
             + "<b style='color: #212529;'>" + str(b_name) + "</b><br>"
-            + "<span style='color: #6c757d; font-size: 9px;'>⏱️ " + str(b_time) + " | 💵 " + str(b_fee) + " EGP</span>"
+            + "<span style='color: #6c757d; font-size: 9px;'>⏱️ " + str(b_time) + " | 💵 " + str(b_fee) + " EGP | 🛒 أدنى طلب: " + str(b_min) + " EGP</span>"
             + "</div>"
         )
     parts.append("</div></div>")
@@ -1397,7 +1408,8 @@ if is_admin:
                             "name": v_info.get("name", vid),
                             "hex": v_info.get("hex", "#28a745"),
                             "time": r.get("clean_time", "-"),
-                            "fee": r.get("clean_fee", "-")
+                            "fee": r.get("clean_fee", "-"),
+                            "min_order": r.get("clean_min_order", "-")
                         })
 
                 if (selected_chains or selected_vendors or (len(vendor_color_map) <= 15 and len(vendor_color_map) > 1)):
@@ -1523,7 +1535,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع حل مشكلة جلب مناطق التغطية بدقة)
+# Tab 2: Vendor Portal (مع التحسينات الجديدة والحدود المطلوبة)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1651,9 +1663,15 @@ with tab2:
                             except: fee_val = 0.0
                             raw_t = str(r.get("clean_time", "45 mins")).strip()
                             final_t = raw_t if (raw_t and raw_t.lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
+                            
+                            raw_min = str(r.get("clean_min_order", "0.0")).strip()
+                            try: min_order_val = float(raw_min)
+                            except: min_order_val = 0.0
+
                             original_alloc[target_vid][zn] = {
                                 "time": final_t,
-                                "fee": fee_val
+                                "fee": min(fee_val, 35.0),
+                                "min_order": min_order_val
                             }
                 
                 st.session_state["portal_orig_alloc"] = copy.deepcopy(original_alloc)
@@ -1823,6 +1841,7 @@ with tab2:
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
+                # 1. بطاقة اسم وكود الفرع بتصميم داكن ومتناسق مع الداشبورد
                 if len(vd) > 1:
                     branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
                     branch_keys_list = list(branch_select_opts.keys())
@@ -1841,9 +1860,22 @@ with tab2:
                         st.rerun()
                 else:
                     st.markdown(
-                        f"<div style='border-left: 5px solid {active_branch_color}; background: #fdfdfd; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px;'>"
-                        f"<b>🎯 الفرع المسؤول:</b> <span style='color:#ff5a00;'>{active_branch_name}</span> (ID: <code>{active_vid}</code>)"
-                        f"</div>",
+                        f"""
+                        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.35); border-right: 4.5px solid #ff5a00; border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    <span style="font-size: 12.5px; color: #8b949e; font-weight: 600;">🎯 {T("الفرع المستهدف حالياً:", "Target Branch:")}</span>
+                                    <div style="font-size: 16px; font-weight: 800; color: #ffffff; margin-top: 3px;">
+                                        {active_branch_name}
+                                    </div>
+                                </div>
+                                <div style="text-align: left; background: rgba(255, 90, 0, 0.12); padding: 5px 11px; border-radius: 8px; border: 1px solid rgba(255, 90, 0, 0.3);">
+                                    <div style="font-size: 10px; color: #8b949e; text-transform: uppercase; font-weight: 600;">Vendor ID</div>
+                                    <div style="font-size: 14px; font-weight: 900; color: #ff5a00; font-family: monospace;">{active_vid}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """,
                         unsafe_allow_html=True
                     )
 
@@ -1875,6 +1907,7 @@ with tab2:
                     key="portal_action_mode_radio"
                 )
 
+                # 1. وضع تعديل الوقت والرسوم والحد الأدنى
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
@@ -1890,37 +1923,60 @@ with tab2:
                         st.session_state["portal_selected_zone"] = selected_edit_zone
 
                         cur_z_info = active_branch_zones.get(selected_edit_zone, {})
-                        raw_t = cur_z_info.get("time", "")
+                        raw_t = cur_z_info.get("time", "45 mins")
                         curr_time = str(raw_t).strip() if (raw_t and str(raw_t).strip().lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
+                        
                         raw_f = cur_z_info.get("fee", 25.0)
                         try: curr_fee = float(raw_f)
                         except: curr_fee = 25.0
+                        curr_fee = min(max(curr_fee, 0.0), 35.0)
 
-                        c_t1, c_t2 = st.columns(2)
+                        raw_min = cur_z_info.get("min_order", 0.0)
+                        try: curr_min = float(raw_min)
+                        except: curr_min = 0.0
+                        curr_min = max(curr_min, 0.0)
+
+                        # تحديد وقت التوصيل الافتراضي في النطاق 20 - 60 دقيقة
+                        time_idx = DELIVERY_TIME_CHOICES.index(curr_time) if curr_time in DELIVERY_TIME_CHOICES else 5
+
+                        c_t1, c_t2, c_t3 = st.columns(3)
                         with c_t1:
-                            edit_time_val = st.text_input(
-                                T("وقت التوصيل الجديد:", "New Delivery Time:"),
-                                value=curr_time,
+                            edit_time_val = st.selectbox(
+                                T("وقت التوصيل المقترح (20-60 دقيقة):", "Delivery Time (20-60m):"),
+                                options=DELIVERY_TIME_CHOICES,
+                                index=time_idx,
                                 key=f"edit_time_{selected_edit_zone}"
                             )
                         with c_t2:
                             edit_fee_val = st.number_input(
-                                T("رسوم التوصيل الجديدة (EGP):", "New Fee (EGP):"),
+                                T("رسوم التوصيل (أقل من 35 EGP):", "Delivery Fee (<35 EGP):"),
+                                min_value=0.0,
+                                max_value=35.0,
                                 value=curr_fee,
                                 step=1.0,
                                 key=f"edit_fee_{selected_edit_zone}"
+                            )
+                        with c_t3:
+                            edit_min_order_val = st.number_input(
+                                T("الحد الأدنى للطلب (EGP):", "Min Order Amount (EGP):"),
+                                min_value=0.0,
+                                value=curr_min,
+                                step=5.0,
+                                key=f"edit_min_order_{selected_edit_zone}"
                             )
 
                         if st.button(T("💾 حفظ تعديل المنطقة", "💾 Save Zone Update"), type="primary", use_container_width=True):
                             working_alloc[active_vid][selected_edit_zone] = {
                                 "time": str(edit_time_val).strip(),
-                                "fee": float(edit_fee_val)
+                                "fee": float(edit_fee_val),
+                                "min_order": float(edit_min_order_val)
                             }
                             st.session_state["portal_working_alloc"] = working_alloc
                             st.session_state["portal_show_diff"] = True
                             st.success(T(f"تم حفظ تعديل منطقة {selected_edit_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Saved {selected_edit_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
+                # 2. وضع إضافة منطقة لهذا الفرع
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
@@ -1944,18 +2000,45 @@ with tab2:
                             ))
                             raw_ot = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("time", "45 mins")
                             raw_of = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("fee", 25.0)
+                            raw_om = working_alloc[other_owner_vid].get(selected_add_zone, {}).get("min_order", 0.0)
                             default_time = str(raw_ot).strip() if (raw_ot and str(raw_ot).strip().lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
                             try: default_fee = float(raw_of)
                             except: default_fee = 25.0
+                            try: default_min = float(raw_om)
+                            except: default_min = 0.0
                         else:
                             default_time = "45 mins"
                             default_fee = 25.0
+                            default_min = 0.0
 
-                        c_a1, c_a2 = st.columns(2)
+                        default_fee = min(max(default_fee, 0.0), 35.0)
+                        add_time_idx = DELIVERY_TIME_CHOICES.index(default_time) if default_time in DELIVERY_TIME_CHOICES else 5
+
+                        c_a1, c_a2, c_a3 = st.columns(3)
                         with c_a1:
-                            add_time_val = st.text_input(T("وقت التوصيل المقترح:", "Delivery Time:"), value=default_time, key=f"add_time_{selected_add_zone}")
+                            add_time_val = st.selectbox(
+                                T("وقت التوصيل المقترح (20-60 دقيقة):", "Delivery Time (20-60m):"),
+                                options=DELIVERY_TIME_CHOICES,
+                                index=add_time_idx,
+                                key=f"add_time_{selected_add_zone}"
+                            )
                         with c_a2:
-                            add_fee_val = st.number_input(T("رسوم التوصيل المقترحة (EGP):", "Fees (EGP):"), value=default_fee, step=1.0, key=f"add_fee_{selected_add_zone}")
+                            add_fee_val = st.number_input(
+                                T("رسوم التوصيل (أقل من 35 EGP):", "Delivery Fee (<35 EGP):"),
+                                min_value=0.0,
+                                max_value=35.0,
+                                value=default_fee,
+                                step=1.0,
+                                key=f"add_fee_{selected_add_zone}"
+                            )
+                        with c_a3:
+                            add_min_order_val = st.number_input(
+                                T("الحد الأدنى للطلب (EGP):", "Min Order Amount (EGP):"),
+                                min_value=0.0,
+                                value=default_min,
+                                step=5.0,
+                                key=f"add_min_order_{selected_add_zone}"
+                            )
 
                         if st.button(T("➕ تأكيد إضافة المنطقة لهذا الفرع", "➕ Add Zone to Branch"), type="primary", use_container_width=True):
                             if other_owner_vid and other_owner_vid in working_alloc and selected_add_zone in working_alloc[other_owner_vid]:
@@ -1963,7 +2046,8 @@ with tab2:
                             
                             working_alloc[active_vid][selected_add_zone] = {
                                 "time": str(add_time_val).strip(),
-                                "fee": float(add_fee_val)
+                                "fee": float(add_fee_val),
+                                "min_order": float(add_min_order_val)
                             }
                             st.session_state["portal_working_alloc"] = working_alloc
                             st.session_state["portal_show_diff"] = True
@@ -1973,6 +2057,7 @@ with tab2:
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Added {selected_add_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
+                # 3. وضع إزالة منطقة من هذا الفرع
                 elif "إزالة" in action_mode or "Remove" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
@@ -2009,13 +2094,13 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول مراجعة التعديلات مع خاصية استبعاد المناطق المحددة
+            # جدول مراجعة التعديلات مع خاصية استبعاد وحذف المناطق
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
                 st.caption(T(
-                    "يعرض هذا الجدول حصرياً المناطق التي طرأ عليها تعديل مع حساب المسافة ونوع الإجراء. يمكنك تحديد أي منطقة لاستبعادها أو التراجع عن تعديلها تماماً:",
-                    "This table shows exclusively modified zones with distances. You can discard or revert any zone below:"
+                    "يعرض هذا الجدول حصرياً المناطق التي طرأ عليها تعديل مع حساب المسافة والحد الأدنى للطلب ونوع الإجراء. يمكنك تحديد أي منطقة لاستبعادها أو التراجع عن تعديلها تماماً:",
+                    "This table shows exclusively modified zones with distances & min order amounts. You can discard or revert any zone below:"
                 ))
 
                 diff_rows = []
@@ -2040,7 +2125,8 @@ with tab2:
                                 "Status": T("مسجلة سابقاً", "Existing"),
                                 "Action": T("إلغاء التفعيل", "Deactivate"),
                                 "Delivery Time": o_zones[z].get("time", "-"),
-                                "Delivery Fees (EGP)": float(o_zones[z].get("fee", 0.0) or 0.0)
+                                "Delivery Fees (EGP)": float(o_zones[z].get("fee", 0.0) or 0.0),
+                                "Minimum Order (EGP)": float(o_zones[z].get("min_order", 0.0) or 0.0)
                             })
 
                     for z in w_zones:
@@ -2058,13 +2144,15 @@ with tab2:
                                 "Status": T("منطقة جديدة", "New Zone"),
                                 "Action": T("نشط", "Active"),
                                 "Delivery Time": str(w_item.get("time", "45 mins")),
-                                "Delivery Fees (EGP)": float(w_item.get("fee", 25.0) or 0.0)
+                                "Delivery Fees (EGP)": float(w_item.get("fee", 25.0) or 0.0),
+                                "Minimum Order (EGP)": float(w_item.get("min_order", 0.0) or 0.0)
                             })
                         else:
                             o_item = o_zones[z]
                             t_chg = str(o_item.get("time", "")).strip() != str(w_item.get("time", "")).strip()
                             f_chg = float(o_item.get("fee", 0.0) or 0.0) != float(w_item.get("fee", 0.0) or 0.0)
-                            if t_chg or f_chg:
+                            m_chg = float(o_item.get("min_order", 0.0) or 0.0) != float(w_item.get("min_order", 0.0) or 0.0)
+                            if t_chg or f_chg or m_chg:
                                 diff_rows.append({
                                     "Discard": False,
                                     "Vendor ID": v_id,
@@ -2072,11 +2160,12 @@ with tab2:
                                     "Assigned Branch": b_lbl,
                                     "Zone": z,
                                     "Distance (km)": dist_calc,
-                                    "Change Type": T("✏️ تعديل سعر / وقت", "✏️ Update Time/Fee"),
+                                    "Change Type": T("✏️ تعديل سعر / وقت / حد أدنى", "✏️ Update Time/Fee/Min Order"),
                                     "Status": T("تعديل بيانات", "Updated"),
                                     "Action": "Edit",
                                     "Delivery Time": str(w_item.get("time", "")),
-                                    "Delivery Fees (EGP)": float(w_item.get("fee", 0.0) or 0.0)
+                                    "Delivery Fees (EGP)": float(w_item.get("fee", 0.0) or 0.0),
+                                    "Minimum Order (EGP)": float(w_item.get("min_order", 0.0) or 0.0)
                                 })
 
                 if not diff_rows:
@@ -2101,7 +2190,8 @@ with tab2:
                             required=True
                         ),
                         "Delivery Time": st.column_config.TextColumn(T("وقت التوصيل المقدر", "Delivery Time")),
-                        "Delivery Fees (EGP)": st.column_config.NumberColumn(T("رسوم التوصيل (EGP)", "Fees (EGP)"))
+                        "Delivery Fees (EGP)": st.column_config.NumberColumn(T("رسوم التوصيل (EGP)", "Fees (EGP)"), max_value=35.0),
+                        "Minimum Order (EGP)": st.column_config.NumberColumn(T("الحد الأدنى للطلب (EGP)", "Min Order (EGP)"))
                     }
 
                     display_diff_df = diff_df.drop(columns=["Vendor ID", "Branch Name"], errors="ignore")
@@ -2417,9 +2507,9 @@ if is_master_admin:
             st.write("")
             if st.button(T("💾 إنشاء الحساب الآن", "💾 Create User Now"), type="primary", use_container_width=True, key="btn_create_user_submit"):
                 if not new_email or not new_password:
-                    st.error(T("يرجى إدخال البريد الإلكتروني وكلمة المرور.", "Please enter email and password."))
+                    st.error(T("يرجى إدخال البريد الإلكتروني وكلمة المرور."))
                 elif ("Chain" in access_choice or "Vendor" in access_choice) and not selected_access_ids_str.strip():
-                    st.error(T("يرجى اختيار سلسلة أو فرع واحد على الأقل من القائمة.", "Please select at least one chain or branch."))
+                    st.error(T("يرجى اختيار سلسلة أو فرع واحد على الأقل من القائمة."))
                 else:
                     ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
                     if ok:
