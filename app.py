@@ -84,7 +84,7 @@ BRANCH_PALETTE = [
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
     {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
@@ -661,7 +661,7 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
 
-# دالة إرسال الإشعارات بالإنجليزية مع شيت الإكسيل (للأدمن وللفيندور)
+# دالة إرسال الإشعارات: إيميل الأدمن بالإنجليزي وإيميل الفيندور بالعربي مع شيت الإكسيل
 def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
     smtp_cfg = load_smtp_config()
     sender_email = smtp_cfg.get("sender_email", "").strip()
@@ -700,7 +700,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 
         recipients_status = []
 
-        # 1. إيميل الأدمن الرئيسي (محمود علاء)
+        # 1. إيميل الأدمن الرئيسي (محمود علاء) - بالإنجليزي
         admin_subject = f"🔔 [Action Required] Pricing & Coverage Request - {vendor_name} (ID: {vendor_id})"
         admin_html = f"""
         <!DOCTYPE html>
@@ -778,24 +778,24 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         server.sendmail(sender_email, [admin_recipient], msg_admin.as_string())
         recipients_status.append(admin_recipient)
 
-        # 2. إيميل الفيندور مع الإكسيل
+        # 2. إيميل الفيندور (Vendor Confirmation) - بالعربي
         if submitted_by_email and str(submitted_by_email).strip() and "@" in str(submitted_by_email):
-            vendor_subject = f"✅ Request Received: Pricing & Coverage Update - {vendor_name} (ID: {vendor_id})"
+            vendor_subject = f"✅ تم استلام طلبكم بنجاح: تحديث أسعار وتغطية - {vendor_name} (ID: {vendor_id})"
             vendor_html = f"""
             <!DOCTYPE html>
-            <html>
+            <html dir="rtl" lang="ar">
             <head>
                 <meta charset="utf-8">
                 <style>
-                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; }}
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; direction: rtl; text-align: right; }}
                     .card {{ max-width: 620px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }}
-                    .header {{ background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%); color: #ffffff; padding: 24px 28px; text-align: left; }}
-                    .header h1 {{ margin: 0; font-size: 20px; font-weight: 800; }}
+                    .header {{ background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%); color: #ffffff; padding: 24px 28px; text-align: center; }}
+                    .header h1 {{ margin: 0; font-size: 21px; font-weight: 800; }}
                     .header p {{ margin: 6px 0 0 0; font-size: 13px; opacity: 0.9; letter-spacing: 0.3px; }}
-                    .content {{ padding: 28px; line-height: 1.6; text-align: left; }}
-                    .box {{ background: #f0fdf4; border-left: 4px solid #16a34a; padding: 14px 18px; border-radius: 6px; margin: 18px 0; }}
+                    .content {{ padding: 28px; line-height: 1.7; }}
+                    .box {{ background: #f0fdf4; border-right: 4px solid #16a34a; padding: 14px 18px; border-radius: 6px; margin: 18px 0; }}
                     .table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                    .table th, .table td {{ padding: 10px 14px; border-bottom: 1px solid #edf2f7; font-size: 13px; text-align: left; }}
+                    .table th, .table td {{ padding: 10px 14px; border-bottom: 1px solid #edf2f7; font-size: 13px; text-align: right; }}
                     .table th {{ background: #f8fafc; color: #64748b; font-weight: 600; width: 50%; }}
                     .notice {{ background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin: 20px 0; }}
                     .footer {{ background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; padding: 14px; font-size: 11.5px; color: #94a3b8; }}
@@ -804,38 +804,38 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             <body>
                 <div class="card">
                     <div class="header">
-                        <h1>✅ Request Successfully Received</h1>
-                        <p>Talabat Vendor Portal & Support</p>
+                        <h1>✅ تم استلام طلبكم بنجاح</h1>
+                        <p>بوابة شركاء وخدمات صيدليات طلبات • Talabat Vendor Portal</p>
                     </div>
                     <div class="content">
-                        <p style="font-size: 15px; margin-top: 0;">Dear <b>{vendor_name} Team</b>,</p>
-                        <p>Thank you for submitting your updated delivery zones and pricing configuration. We have received your submission and it has been routed to our Operations team for verification.</p>
+                        <p style="font-size: 15px; margin-top: 0;">عزيزنا شريك النجاح / <b>فريق {vendor_name}</b>،</p>
+                        <p>نشكركم على استخدام بوابة الفيندور. نود إحاطتكم بأنه تم استلام وتوثيق طلب تعديل مناطق التغطية وأسعار التوصيل الخاصة بكم بنجاح، وجارٍ مراجعته وتدقيقه من قبل فريق العمليات واللوجستيات.</p>
                         
                         <div class="box">
                             <div style="font-size: 16px; font-weight: 800; color: #15803d;">🏬 {vendor_name}</div>
-                            <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>Vendor ID:</b> <code>{vendor_id}</code></div>
-                            <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>Submission Time:</b> {date_str}</div>
+                            <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>كود الفرع (Vendor ID):</b> <code>{vendor_id}</code></div>
+                            <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>تاريخ ووقت الإرسال:</b> {date_str}</div>
                         </div>
 
-                        <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📋 Summary of Submitted Changes:</h4>
+                        <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📋 ملخص التعديلات المرسلة في هذا الطلب:</h4>
                         <table class="table">
-                            <tr><th>Total Zones Submitted</th><td><b>{total_count}</b> zones</td></tr>
-                            <tr><th>New Zone Additions</th><td style="color:#16a34a; font-weight:bold;">+{add_count}</td></tr>
-                            <tr><th>Pricing & SLA Updates</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
-                            <tr><th>Deactivated Zones</th><td style="color:#dc2626; font-weight:bold;">-{deact_count}</td></tr>
+                            <tr><th>إجمالي المناطق في الطلب</th><td><b>{total_count}</b> مناطق</td></tr>
+                            <tr><th>مناطق جديدة مضافة</th><td style="color:#16a34a; font-weight:bold;">+{add_count} منطقة</td></tr>
+                            <tr><th>مناطق تم تعديل سعرها أو وقتها</th><td style="color:#ea580c; font-weight:bold;">{edit_count} منطقة</td></tr>
+                            <tr><th>مناطق ملغاة التفعيل</th><td style="color:#dc2626; font-weight:bold;">-{deact_count} منطقة</td></tr>
                         </table>
 
                         <div class="notice">
-                            📎 <b>Your Submission Record:</b> Attached to this email is <code>{filename}</code> with the complete breakdown of zones, proposed delivery fees, and estimated delivery times for your records.
+                            📎 <b>نسخة من طلبكم:</b> مرفق بهذه الرسالة ملف إكسيل كامل <code>{filename}</code> يتضمن كافة تفاصيل المناطق التي قمتم بتعديلها مع المسافات المحسوبة وأوقات ورسوم التوصيل المقترحة للاحتفاظ بها في سجلاتكم.
                         </div>
 
                         <p style="font-size: 13px; color: #64748b;">
-                            <b>What happens next?</b><br>
-                            Our operations team will review the distance parameters and delivery SLAs. Once approved, the changes will take effect live on the platform.
+                            <b>ما هي الخطوة القادمة؟</b><br>
+                            يقوم فريق العمليات بمراجعة نطاق التوصيل واعتماد التعديلات، وبمجرد الاعتماد النهائي سيتم تفعيل الإعدادات الجديدة مباشرة على منصة طلبات.
                         </p>
                     </div>
                     <div class="footer">
-                        Talabat Vendor Support & Logistics Operations • Egypt
+                        فريق دعم شركاء وعمليات صيدليات طلبات • جمهورية مصر العربية
                     </div>
                 </div>
             </body>
@@ -1523,7 +1523,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (مع حل مشكلة جلب مناطق التغطية بدقة)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -2538,9 +2538,6 @@ if is_master_admin:
                     else:
                         st.error(msg)
 
-        # -------------------------------------------------------------
-        # 📧 إعدادات واختبار البريد الإلكتروني (SMTP Settings & Live Test)
-        # -------------------------------------------------------------
         with tab_u4:
             st.subheader(T("⚙️ إعدادات واختبار خادم البريد الإلكتروني (SMTP Settings)", "⚙️ SMTP Settings & Live Test"))
             st.caption(T(
@@ -2553,7 +2550,7 @@ if is_master_admin:
             sc1, sc2 = st.columns(2)
             with sc1:
                 cfg_server = st.text_input("SMTP Server:", value=curr_smtp.get("server", "smtp.gmail.com"), key="smtp_cfg_server")
-                cfg_sender = st.text_input(T("بريد الراسل (Sender Email):", "Sender Email:"), value=curr_smtp.get("sender_email", ""), placeholder="e.g. notifications@talabat.com", key="smtp_cfg_sender")
+                cfg_sender = st.text_input(T("بريد الراسل (Sender Email):", "Sender Email:"), value=curr_smtp.get("sender_email", ""), placeholder="e.g. yourname@gmail.com", key="smtp_cfg_sender")
                 cfg_admin = st.text_input(T("بريد استلام الإشعارات (Admin Recipient):", "Admin Recipient:"), value=curr_smtp.get("admin_email", MASTER_ADMIN_EMAIL), key="smtp_cfg_admin")
             with sc2:
                 cfg_port = st.selectbox("SMTP Port:", [587, 465], index=0 if curr_smtp.get("port", 587) == 587 else 1, key="smtp_cfg_port")
