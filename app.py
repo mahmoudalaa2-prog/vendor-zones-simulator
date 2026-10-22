@@ -97,7 +97,6 @@ BRANCH_PALETTE = [
     {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
 ]
 
-# خيارات وقت التوصيل المتاحة (بين 20 و 60 دقيقة فقط)
 DELIVERY_TIME_CHOICES = ["20 mins", "25 mins", "30 mins", "35 mins", "40 mins", "45 mins", "50 mins", "55 mins", "60 mins"]
 
 # ==========================================
@@ -1215,7 +1214,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (عرض كامل المضلعات بدون حذف)
+# Tab 1: Admin Map (مع التحديث الفوري لإعادة ضبط الفلاتر)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1229,6 +1228,10 @@ if is_admin:
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
+            if "admin_filter_ver" not in st.session_state:
+                st.session_state["admin_filter_ver"] = 0
+            ver = st.session_state["admin_filter_ver"]
+
             f_col1, f_col2, f_col3, f_col4 = st.columns([1.2, 1.4, 1.4, 1.2])
             
             with f_col1:
@@ -1236,14 +1239,15 @@ if is_admin:
                     all_cities = sorted([c for c in user_vendors["clean_city"].dropna().unique() if c and c != "-"])
                 else: all_cities = []
                 
-                if "admin_map_cities" in st.session_state:
-                    st.session_state["admin_map_cities"] = [c for c in st.session_state["admin_map_cities"] if c in all_cities]
+                curr_city_k = f"admin_map_cities_{ver}"
+                if curr_city_k in st.session_state:
+                    st.session_state[curr_city_k] = [c for c in st.session_state[curr_city_k] if c in all_cities]
 
                 selected_cities = st.multiselect(
                     T("1. المدينة / المحافظة:", "1. City:"),
                     options=all_cities,
                     placeholder=T("الكل (أو اختر مدن)", "All (or select cities)"),
-                    key="admin_map_cities"
+                    key=curr_city_k
                 )
 
             city_subset = user_vendors[user_vendors["clean_city"].isin(selected_cities)] if selected_cities else user_vendors.copy()
@@ -1253,14 +1257,15 @@ if is_admin:
                     valid_ams = sorted([a for a in city_subset["clean_am"].dropna().unique() if is_valid_am_name(a)])
                 else: valid_ams = []
                 
-                if "admin_map_ams" in st.session_state:
-                    st.session_state["admin_map_ams"] = [a for a in st.session_state["admin_map_ams"] if a in valid_ams]
+                curr_am_k = f"admin_map_ams_{ver}"
+                if curr_am_k in st.session_state:
+                    st.session_state[curr_am_k] = [a for a in st.session_state[curr_am_k] if a in valid_ams]
 
                 selected_ams = st.multiselect(
                     T("2. مسؤول الحساب (AM):", "2. Account Manager (AM):"),
                     options=valid_ams,
                     placeholder=T("الكل (أو اختر AMs)", "All (or select AMs)"),
-                    key="admin_map_ams"
+                    key=curr_am_k
                 )
 
             am_subset = city_subset[city_subset["clean_am"].isin(selected_ams)] if selected_ams else city_subset.copy()
@@ -1275,15 +1280,16 @@ if is_admin:
                     chain_map = {}
                     chain_options = []
                     
-                if "admin_map_chains" in st.session_state:
-                    st.session_state["admin_map_chains"] = [c for c in st.session_state["admin_map_chains"] if c in chain_options]
+                curr_chain_k = f"admin_map_chains_{ver}"
+                if curr_chain_k in st.session_state:
+                    st.session_state[curr_chain_k] = [c for c in st.session_state[curr_chain_k] if c in chain_options]
 
                 selected_chains = st.multiselect(
                     T("3. السلسلة (Chain):", "3. Chain:"),
                     options=chain_options,
                     format_func=lambda x: chain_map.get(x, x),
                     placeholder=T("الكل (أو اختر سلاسل)", "All (or select chains)"),
-                    key="admin_map_chains"
+                    key=curr_chain_k
                 )
 
             chain_subset = am_subset[am_subset["clean_cid"].isin(selected_chains)] if selected_chains else am_subset.copy()
@@ -1299,15 +1305,16 @@ if is_admin:
                     vendor_opts = {}
                     vendor_options = []
                     
-                if "admin_map_vendors" in st.session_state:
-                    st.session_state["admin_map_vendors"] = [v for v in st.session_state["admin_map_vendors"] if v in vendor_options]
+                curr_vendor_k = f"admin_map_vendors_{ver}"
+                if curr_vendor_k in st.session_state:
+                    st.session_state[curr_vendor_k] = [v for v in st.session_state[curr_vendor_k] if v in vendor_options]
 
                 selected_vendors = st.multiselect(
                     T("4. الفرع (Vendor):", "4. Vendor:"),
                     options=vendor_options,
                     format_func=lambda x: vendor_opts.get(x, x),
                     placeholder=T("الكل (أو اختر فروع)", "All (or select vendors)"),
-                    key="admin_map_vendors"
+                    key=curr_vendor_k
                 )
 
             df_disp = chain_subset[chain_subset["clean_vid"].isin(selected_vendors)] if selected_vendors else chain_subset.copy()
@@ -1317,22 +1324,26 @@ if is_admin:
                 selected_active = st.selectbox(
                     T("5. حالة التفعيل (Is Active):", "5. Active Status (Is Active):"),
                     options=[T("الكل", "All"), T("نشط فقط (Yes)", "Active Only (Yes)"), T("غير نشط (No)", "Inactive Only (No)")],
-                    key="admin_filter_active"
+                    key=f"admin_filter_active_{ver}"
                 )
             with f2_col2:
                 selected_hidden = st.selectbox(
                     T("6. حالة الظهور (Is Hidden):", "6. Visibility (Is Hidden):"),
                     options=[T("الكل", "All"), T("الظاهر فقط (No)", "Visible Only (No)"), T("المخفي فقط (Yes)", "Hidden Only (Yes)")],
-                    key="admin_filter_hidden"
+                    key=f"admin_filter_hidden_{ver}"
                 )
             with f2_col3:
                 st.write("")
                 st.write("")
-                if st.button(T("🔄 إعادة ضبط الفلاتر", "🔄 Reset Filters"), key="admin_reset_filters", use_container_width=True):
-                    for k in ["admin_map_cities", "admin_map_ams", "admin_map_chains", "admin_map_vendors", "admin_filter_active", "admin_filter_hidden"]:
-                        if k in st.session_state:
-                            del st.session_state[k]
-                    st.rerun()
+                def reset_admin_filters_callback():
+                    st.session_state["admin_filter_ver"] = st.session_state.get("admin_filter_ver", 0) + 1
+
+                st.button(
+                    T("🔄 إعادة ضبط الفلاتر", "🔄 Reset Filters"), 
+                    key=f"admin_reset_filters_btn_{ver}", 
+                    on_click=reset_admin_filters_callback,
+                    use_container_width=True
+                )
 
             if not df_disp.empty and "clean_active" in df_disp.columns:
                 if "Yes" in selected_active or "نشط" in selected_active:
@@ -1535,7 +1546,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع التحسينات الجديدة والحدود المطلوبة)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1841,7 +1852,6 @@ with tab2:
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
-                # 1. بطاقة اسم وكود الفرع بتصميم داكن ومتناسق مع الداشبورد
                 if len(vd) > 1:
                     branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
                     branch_keys_list = list(branch_select_opts.keys())
@@ -1907,7 +1917,6 @@ with tab2:
                     key="portal_action_mode_radio"
                 )
 
-                # 1. وضع تعديل الوقت والرسوم والحد الأدنى
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
@@ -1936,7 +1945,6 @@ with tab2:
                         except: curr_min = 0.0
                         curr_min = max(curr_min, 0.0)
 
-                        # تحديد وقت التوصيل الافتراضي في النطاق 20 - 60 دقيقة
                         time_idx = DELIVERY_TIME_CHOICES.index(curr_time) if curr_time in DELIVERY_TIME_CHOICES else 5
 
                         c_t1, c_t2, c_t3 = st.columns(3)
@@ -1976,7 +1984,6 @@ with tab2:
                             st.success(T(f"تم حفظ تعديل منطقة {selected_edit_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Saved {selected_edit_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 2. وضع إضافة منطقة لهذا الفرع
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
@@ -2057,7 +2064,6 @@ with tab2:
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Added {selected_add_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 3. وضع إزالة منطقة من هذا الفرع
                 elif "إزالة" in action_mode or "Remove" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
