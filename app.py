@@ -2452,7 +2452,7 @@ if is_master_admin:
                 )
                 new_email = st.text_input(T("البريد الإلكتروني:", "Email:"), key="add_user_email_input").strip().lower()
             with col_u2:
-                new_password = st.text_input(T("كلمة المرور:", "Password:")), type="password", key="add_user_password_input").strip()
+                new_password = st.text_input(T("كلمة المرور:", "Password:"), type="password", key="add_user_password_input").strip()
 
             st.markdown("---")
             access_choice = st.radio(
