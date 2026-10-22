@@ -205,11 +205,10 @@ USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
-# إعدادات خادم البريد التلقائي
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_SENDER_EMAIL = ""       # ضع بريد الراسل هنا
-SMTP_SENDER_PASSWORD = ""    # ضع كلمة مرور التطبيقات App Password المكونة من 16 حرفاً
+SMTP_SENDER_EMAIL = ""
+SMTP_SENDER_PASSWORD = ""
 TARGET_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
 try:
@@ -711,9 +710,7 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
 
-# ==========================================
-# دالة إرسال الإشعارات بالإنجليزية مع شيت الإكسيل (للأدمن والفيندور)
-# ==========================================
+# دالة إرسال الإشعارات بالإنجليزية مع شيت الإكسيل (للأدمن وللفيندور)
 def send_request_emails(vendor_id, vendor_name, records_df, 
                         submitted_by_email,
                         sender_email=None, sender_password=None, 
@@ -727,12 +724,11 @@ def send_request_emails(vendor_id, vendor_name, records_df,
     admin_recipient = admin_recipient or TARGET_ADMIN_EMAIL
 
     if not sender_email or not sender_password:
-        return False, "Email notification skipped: SMTP sender credentials not configured in code/secrets."
+        return False, "Email notification skipped: SMTP credentials not set."
 
     try:
         date_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
         
-        # 1. إنشاء ملف الإكسيل في الذاكرة
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             records_df.to_excel(writer, index=False, sheet_name=f"Vendor_{str(vendor_id)[:10]}")
@@ -741,13 +737,11 @@ def send_request_emails(vendor_id, vendor_name, records_df,
         safe_name = re.sub(r'[^\w\s-]', '', str(vendor_name)).strip().replace(" ", "_")
         filename = f"Pricing_Request_{vendor_id}_{safe_name}.xlsx"
 
-        # الإحصائيات
         total_count = len(records_df)
         add_count = len(records_df[records_df["Action"].astype(str).str.contains("نشط|Active|New", case=False)])
         edit_count = len(records_df[records_df["Action"].astype(str).str.contains("Edit|تعديل", case=False)])
         deact_count = len(records_df[records_df["Action"].astype(str).str.contains("إلغاء|Deactivate", case=False)])
 
-        # الاتصال بخادم البريد
         if smtp_port == 465:
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
         else:
@@ -759,9 +753,7 @@ def send_request_emails(vendor_id, vendor_name, records_df,
 
         recipients_status = []
 
-        # -------------------------------------------------------------
-        # 1. إيميل الأدمن (محمود علاء) باللغة الإنجليزية
-        # -------------------------------------------------------------
+        # 1. إيميل الأدمن الرئيسي
         admin_subject = f"🔔 [Action Required] Pricing & Coverage Request - {vendor_name} (ID: {vendor_id})"
         admin_html = f"""
         <!DOCTYPE html>
@@ -839,9 +831,7 @@ def send_request_emails(vendor_id, vendor_name, records_df,
         server.sendmail(sender_email, [admin_recipient], msg_admin.as_string())
         recipients_status.append(admin_recipient)
 
-        # -------------------------------------------------------------
-        # 2. إيميل الفيندور (Vendor Confirmation) باللغة الإنجليزية مع الإكسيل
-        # -------------------------------------------------------------
+        # 2. إيميل الفيندور مع الإكسيل
         if submitted_by_email and submitted_by_email.strip() and "@" in submitted_by_email:
             vendor_subject = f"✅ Request Received: Pricing & Coverage Update - {vendor_name} (ID: {vendor_id})"
             vendor_html = f"""
@@ -1587,12 +1577,11 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (التبديل الذكي للوضع + التحديد من أول كليك)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
     
-    # عرض رسائل النجاح السابقة بعد التحديث
     if "submission_success_msg" in st.session_state:
         st.success(st.session_state.pop("submission_success_msg"))
     if "submission_mail_info" in st.session_state:
@@ -1719,7 +1708,6 @@ with tab2:
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
-            # دليل ألوان السلسلة
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -1771,7 +1759,6 @@ with tab2:
 
             cm, cf = st.columns([6, 4])
 
-            # الخريطة والتحريك والتحديد
             with cm:
                 st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
@@ -1863,7 +1850,6 @@ with tab2:
                         st.session_state["portal_show_diff"] = False
                         st.rerun()
 
-            # لوحة التحكم بجوار الخريطة
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
@@ -1919,7 +1905,6 @@ with tab2:
                     key="portal_action_mode_radio"
                 )
 
-                # 1. وضع تعديل الوقت والرسوم لمناطق حالية
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
@@ -1966,7 +1951,6 @@ with tab2:
                             st.success(T(f"تم حفظ تعديل منطقة {selected_edit_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Saved {selected_edit_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 2. وضع إضافة منطقة لهذا الفرع
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
@@ -2019,7 +2003,6 @@ with tab2:
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Added {selected_add_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 3. وضع إزالة منطقة من هذا الفرع
                 elif "إزالة" in action_mode or "Remove" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
@@ -2056,7 +2039,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول حصر التعديلات فقط مع حساب المسافة ووضع Edit وإرسال البريدين
+            # جدول حصر التعديلات فقط
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
@@ -2178,10 +2161,8 @@ with tab2:
                             b_sub_df["Action"] = [sa[1] for sa in statuses_and_actions]
                             b_sub_df["Classification"] = "Vendor Zone Update"
 
-                            # 1. الحفظ في السجل المحلي وقاعدة البيانات
                             saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
                             
-                            # 2. إرسال الإيميلين بالإنجليزية (للأدمن وللفيندور مع الإكسيل)
                             ok_mail, mail_msg = send_request_emails(
                                 vendor_id=v_id, 
                                 vendor_name=b_vname, 
@@ -2203,7 +2184,7 @@ with tab2:
                         st.rerun()
 
 # ==========================================
-# Tab 3: Incoming Requests (صفحة الطلبات المجمعة)
+# Tab 3: Incoming Requests
 # ==========================================
 if is_admin:
     with tab3:
@@ -2218,7 +2199,6 @@ if is_admin:
                 raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                 raw_df["Action"] = raw_df.get("Action", "").astype(str)
 
-                # تحديث السجلات لحظياً لحساب المسافة واستبدال نشط بـ Edit للمناطق المعدلة
                 for idx, r in raw_df.iterrows():
                     v_id_val = str(r["Vendor ID"]).strip()
                     z_val = str(r.get("Zone", "")).strip()
@@ -2233,7 +2213,6 @@ if is_admin:
                         raw_df.at[idx, "Action"] = "Edit"
                         raw_df.at[idx, "Final_Status"] = "Edit"
 
-                # فلاتر التصفية
                 f_c1, f_c2 = st.columns([1.5, 1.5])
                 with f_c1:
                     all_vn = [T("كل الفروع", "All Vendors")] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
@@ -2249,7 +2228,6 @@ if is_admin:
                 if f_vid != T("كل الأكواد", "All IDs"):
                     filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
 
-                # تجميع الطلبات حسب كل إرسال (Vendor + Date)
                 summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
                     Total_Zones=("Zone", "count"),
                     Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط|Edit", case=False)).sum()),
@@ -2338,111 +2316,210 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع. (عند إرسال أي تعديل من Vendor Portal سيظهر هنا فوراً)", "📭 No incoming requests found. Submit modifications in Vendor Portal to view them here."))
 
 # ==========================================
-# Tab 4: Users Management
+# Tab 4: Users Management (محدث بالكامل لفرز السلاسل والفروع بدقة وتفاعل لحظي)
 # ==========================================
 if is_master_admin:
     with tab4:
         st.header(T("👥 إدارة المستخدمين والصلاحيات (الأدمن الرئيسي)", "👥 User Management & Permissions (Master Admin Only)"))
         st.caption(T(f"🔒 صلاحية الوصول لهذه الشاشة محصورة ببريد: `{MASTER_ADMIN_EMAIL}`", f"🔒 Access strictly restricted to: `{MASTER_ADMIN_EMAIL}`"))
         
+        # تجهيز قوائم السلاسل والفروع بفرز واحترافية كاملة
+        # 1. قائمة السلاسل الفريدة مع عدد الفروع
+        valid_chains_data = df_vendors[df_vendors["clean_cid"] != ""].copy()
+        chain_opts_map = {}
+        if not valid_chains_data.empty:
+            for cid_val, c_group in valid_chains_data.groupby("clean_cid"):
+                names = [str(n).strip() for n in c_group["clean_chain_name"].unique() if str(n).strip() not in ["", "nan", "None", "-"]]
+                c_display_name = names[0] if names else f"Chain {cid_val}"
+                branch_count = len(c_group)
+                chain_opts_map[str(cid_val)] = f"🏢 {c_display_name} (ID: {cid_val} - {branch_count} {T('فروع', 'branches')})"
+
+        # 2. قائمة الفروع الفردية مع اسم السلسلة التابع لها
+        valid_vendors_data = df_vendors[df_vendors["clean_vid"] != ""].copy()
+        vendor_opts_map = {}
+        if not valid_vendors_data.empty:
+            for _, v_row in valid_vendors_data.iterrows():
+                vid_val = str(v_row["clean_vid"]).strip()
+                v_display_name = str(v_row["clean_name"]).strip()
+                v_chain_name = str(v_row["clean_chain_name"]).strip()
+                chain_suffix = f" [سلسلة: {v_chain_name}]" if v_chain_name and v_chain_name not in ["", "nan", "None", "-"] else ""
+                vendor_opts_map[vid_val] = f"💊 {v_display_name} (ID: {vid_val}{chain_suffix})"
+
         tab_u1, tab_u2, tab_u3 = st.tabs([
             T("➕ إضافة مستخدم جديد", "➕ Add New User"),
             T("✏️ تعديل صلاحيات وكلمة مرور مستخدم", "✏️ Edit Permissions & Password"),
             T("📋 قائمة المستخدمين", "📋 Users List")
         ])
         
+        # -------------------------------------------------------------
+        # ➕ إضافة مستخدم جديد
+        # -------------------------------------------------------------
         with tab_u1:
-            u_role = st.selectbox(T("نوع الحساب:", "Role:"), ["admin", "vendor"], format_func=lambda x: T("مسؤول نظام (Admin)", "Admin") if x == "admin" else T("مستخدم فيندور (Vendor User)", "Vendor User"))
-            with st.form("add_user_form"):
-                new_email = st.text_input(T("البريد الإلكتروني:", "Email:")).strip().lower()
-                new_password = st.text_input(T("كلمة المرور:", "Password:")).strip()
-                access_choice = st.radio(
-                    T("نطاق الصلاحيات والفروع التابعة:", "Assigned Scope:"),
-                    [T("كل فروع القسم (Master Access)", "All Branches (Master Access)"), T("سلاسل محددة (Chain ID)", "Specific Chains (Chain ID)"), T("فروع محددة (Vendor ID)", "Specific Branches (Vendor ID)")]
+            st.markdown(f"#### {T('بيانات الحساب الجديد', 'New Account Details')}")
+            col_u1, col_u2 = st.columns(2)
+            with col_u1:
+                u_role = st.selectbox(
+                    T("نوع الحساب:", "Role:"), 
+                    ["vendor", "admin"], 
+                    format_func=lambda x: T("مستخدم فيندور (Vendor User)", "Vendor User") if x == "vendor" else T("مسؤول نظام (Admin)", "Admin"),
+                    key="add_user_role_select"
                 )
-                
-                access_type, selected_access_ids_str = "all", "all"
-                if "Chain" in access_choice or "سلاسل" in access_choice:
-                    access_type = "Chain ID"
-                    chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
-                    chains_df = chains_df[chains_df["clean_cid"] != ""]
-                    chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
-                    chosen_chains = st.multiselect(T("اختر السلاسل:", "Select Chains:"), options=list(chain_opts.keys()), format_func=lambda x: chain_opts[x])
-                    selected_access_ids_str = ", ".join(chosen_chains)
-                elif "Vendor" in access_choice or "فروع" in access_choice:
-                    access_type = "Vendor ID"
-                    vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
-                    vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
-                    vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
-                    chosen_vendors = st.multiselect(T("اختر الفروع:", "Select Branches:"), options=list(vendor_opts.keys()), format_func=lambda x: vendor_opts[x])
-                    selected_access_ids_str = ", ".join(chosen_vendors)
-                
-                if st.form_submit_button(T("💾 إنشاء الحساب", "💾 Create User"), type="primary"):
-                    if not new_email or not new_password:
-                        st.error(T("يرجى ملء جميع الحقول المطلوبة.", "Please fill in all required fields."))
-                    elif ("Chain" in access_choice or "Vendor" in access_choice) and not selected_access_ids_str:
-                        st.error(T("يرجى اختيار فرع أو سلسلة واحدة على الأقل.", "Please select at least one branch or chain."))
-                    else:
-                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
-                        if ok: st.success(msg); st.rerun()
-                        else: st.error(msg)
+                new_email = st.text_input(T("البريد الإلكتروني:", "Email:"), key="add_user_email_input").strip().lower()
+            with col_u2:
+                new_password = st.text_input(T("كلمة المرور:", "Password:"), type="password", key="add_user_password_input").strip()
 
+            st.markdown("---")
+            # زر اختيار النطاق خارج الفورم ليعمل التبديل فورياً بين Chains و Vendors
+            access_choice = st.radio(
+                T("اختر نطاق الربط والفروع التابعة:", "Assigned Scope:"),
+                [
+                    T("سلاسل محددة (Chain ID)", "Specific Chains (Chain ID)"),
+                    T("فروع محددة (Vendor ID)", "Specific Branches (Vendor ID)"),
+                    T("كل فروع القسم (Master Access)", "All Branches (Master Access)")
+                ],
+                key="add_user_scope_radio"
+            )
+
+            access_type = "all"
+            selected_access_ids_str = "all"
+
+            if "Chain" in access_choice or "سلاسل" in access_choice:
+                access_type = "Chain ID"
+                st.info(T("🏢 حدد السلسلة أو السلاسل المطلوبة (سيتم إعطاء المستخدم حق الوصول لكافة فروع السلسلة تلقائياً):", "🏢 Select chain(s) - user will have access to all chain branches:"))
+                chosen_chains = st.multiselect(
+                    T("اختر من قائمة السلاسل (Chains List):", "Select from Chains:"),
+                    options=list(chain_opts_map.keys()),
+                    format_func=lambda x: chain_opts_map.get(x, x),
+                    key="add_user_chains_multiselect"
+                )
+                selected_access_ids_str = ", ".join(chosen_chains)
+
+            elif "Vendor" in access_choice or "فروع" in access_choice:
+                access_type = "Vendor ID"
+                st.info(T("💊 حدد الفروع المستقلة المطلوبة:", "💊 Select individual branch(es):"))
+                chosen_vendors = st.multiselect(
+                    T("اختر من قائمة الفروع (Vendors List):", "Select from Vendors:"),
+                    options=list(vendor_opts_map.keys()),
+                    format_func=lambda x: vendor_opts_map.get(x, x),
+                    key="add_user_vendors_multiselect"
+                )
+                selected_access_ids_str = ", ".join(chosen_vendors)
+            else:
+                access_type = "all"
+                selected_access_ids_str = "all"
+                st.warning(T("⚠️ تنبيه: اختيار 'كل فروع القسم' يمنح المستخدم إمكانية إدارة ورؤية كافة فروع وسلاسل المنصة.", "⚠️ Warning: Master Access allows viewing all branches."))
+
+            st.write("")
+            if st.button(T("💾 إنشاء الحساب الآن", "💾 Create User Now"), type="primary", use_container_width=True, key="btn_create_user_submit"):
+                if not new_email or not new_password:
+                    st.error(T("يرجى إدخال البريد الإلكتروني وكلمة المرور.", "Please enter email and password."))
+                elif ("Chain" in access_choice or "Vendor" in access_choice) and not selected_access_ids_str.strip():
+                    st.error(T("يرجى اختيار سلسلة أو فرع واحد على الأقل من القائمة.", "Please select at least one chain or branch."))
+                else:
+                    ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        # -------------------------------------------------------------
+        # ✏️ تعديل صلاحيات وكلمة مرور مستخدم مسجل
+        # -------------------------------------------------------------
         with tab_u2:
             st.subheader(T("تعديل صلاحيات ومحفظة فروع وكلمة مرور مستخدم مسجل", "Edit User Permissions, Portfolio & Password"))
             users_list_df = get_users_df()
-            selected_edit_user = st.selectbox(T("اختر المستخدم للتعديل:", "Select User to Edit:"), options=users_list_df["email"].tolist())
+            selected_edit_user = st.selectbox(
+                T("اختر المستخدم للتعديل:", "Select User to Edit:"), 
+                options=users_list_df["email"].tolist(),
+                key="select_user_to_edit"
+            )
             user_current_row = users_list_df[users_list_df["email"] == selected_edit_user].iloc[0]
-            
-            with st.form("edit_user_perm_form"):
+
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
                 e_role = st.selectbox(
                     T("نوع الحساب:", "Role:"),
-                    options=["admin", "vendor"],
-                    index=0 if user_current_row["role"] == "admin" else 1,
-                    format_func=lambda x: T("مسؤول نظام (Admin)", "Admin") if x == "admin" else T("مستخدم فيندور (Vendor User)", "Vendor User")
+                    options=["vendor", "admin"],
+                    index=0 if user_current_row["role"] == "vendor" else 1,
+                    format_func=lambda x: T("مستخدم فيندور (Vendor User)", "Vendor User") if x == "vendor" else T("مسؤول نظام (Admin)", "Admin"),
+                    key="edit_user_role_select"
                 )
-                
+            with col_e2:
                 edit_password_val = st.text_input(
                     T("🔑 كلمة المرور الجديدة (اتركه فارغاً للإبقاء على الحالية دون تغيير):", "🔑 New Password (leave blank to keep current):"),
-                    type="password"
+                    type="password",
+                    key="edit_user_password_input"
                 )
 
-                default_scope_idx = 0 if user_current_row["access_type"] == "all" else (1 if user_current_row["access_type"] == "Chain ID" else 2)
-                e_access_choice = st.radio(
-                    T("نطاق الصلاحيات والفروع التابعة:", "Assigned Scope:"),
-                    [T("كل فروع القسم (Master Access)", "All Branches (Master Access)"), T("سلاسل محددة (Chain ID)", "Specific Chains (Chain ID)"), T("فروع محددة (Vendor ID)", "Specific Branches (Vendor ID)")],
-                    index=default_scope_idx
-                )
-                
-                e_access_type, e_selected_access_ids_str = "all", "all"
-                if "Chain" in e_access_choice or "سلاسل" in e_access_choice:
-                    e_access_type = "Chain ID"
-                    if not df_vendors.empty and "clean_cid" in df_vendors.columns:
-                        chains_df = df_vendors[["clean_cid", "clean_chain_name"]].drop_duplicates()
-                        chains_df = chains_df[chains_df["clean_cid"] != ""]
-                        chain_opts = dict(zip(chains_df["clean_cid"], chains_df["clean_chain_name"] + " (" + chains_df["clean_cid"] + ")"))
-                        curr_ids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in chain_opts]
-                        chosen_chains = st.multiselect(T("اختر السلاسل التابعة له:", "Select Chains:"), options=list(chain_opts.keys()), default=curr_ids, format_func=lambda x: chain_opts[x])
-                        e_selected_access_ids_str = ", ".join(chosen_chains)
-                    else: e_selected_access_ids_str = ""
-                elif "Vendor" in e_access_choice or "فروع" in e_access_choice:
-                    e_access_type = "Vendor ID"
-                    if not df_vendors.empty and "clean_vid" in df_vendors.columns:
-                        vendors_df = df_vendors[["clean_vid", "clean_name"]].drop_duplicates()
-                        vendors_df = vendors_df[vendors_df["clean_vid"] != ""]
-                        vendor_opts = dict(zip(vendors_df["clean_vid"], vendors_df["clean_name"] + " (" + vendors_df["clean_vid"] + ")"))
-                        curr_vids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in vendor_opts]
-                        chosen_vendors = st.multiselect(T("اختر الفروع التابعة له:", "Select Branches:"), options=list(vendor_opts.keys()), default=curr_vids, format_func=lambda x: vendor_opts[x])
-                        e_selected_access_ids_str = ", ".join(chosen_vendors)
-                    else: e_selected_access_ids_str = ""
-                    
-                if st.form_submit_button(T("💾 حفظ التعديلات وتحديث كلمة المرور", "💾 Save Changes & Password"), type="primary"):
-                    ok, msg, updated_row = update_user_permissions(selected_edit_user, e_role, e_access_type, e_selected_access_ids_str, edit_password_val, current_user_dict=current_user)
-                    if ok:
-                        if selected_edit_user.lower() == current_user["email"].lower():
-                            st.session_state["current_user"] = updated_row
-                        st.success(msg); st.rerun()
-                    else: st.error(msg)
+            st.markdown("---")
+            current_scope = user_current_row["access_type"]
+            default_scope_idx = 0 if current_scope == "Chain ID" else (1 if current_scope == "Vendor ID" else 2)
+            
+            e_access_choice = st.radio(
+                T("اختر نطاق الربط والفروع التابعة:", "Assigned Scope:"),
+                [
+                    T("سلاسل محددة (Chain ID)", "Specific Chains (Chain ID)"),
+                    T("فروع محددة (Vendor ID)", "Specific Branches (Vendor ID)"),
+                    T("كل فروع القسم (Master Access)", "All Branches (Master Access)")
+                ],
+                index=default_scope_idx,
+                key="edit_user_scope_radio"
+            )
 
+            e_access_type = "all"
+            e_selected_access_ids_str = "all"
+
+            if "Chain" in e_access_choice or "سلاسل" in e_access_choice:
+                e_access_type = "Chain ID"
+                curr_cids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in chain_opts_map]
+                st.info(T("🏢 اختر السلاسل التابعة لهذا المستخدم:", "🏢 Select assigned chains:"))
+                chosen_chains = st.multiselect(
+                    T("قائمة السلاسل (Chains List):", "Chains List:"),
+                    options=list(chain_opts_map.keys()),
+                    default=curr_cids,
+                    format_func=lambda x: chain_opts_map.get(x, x),
+                    key="edit_user_chains_multiselect"
+                )
+                e_selected_access_ids_str = ", ".join(chosen_chains)
+
+            elif "Vendor" in e_access_choice or "فروع" in e_access_choice:
+                e_access_type = "Vendor ID"
+                curr_vids = [x.strip() for x in str(user_current_row["access_ids"]).split(",") if x.strip() in vendor_opts_map]
+                st.info(T("💊 اختر الفروع الفردية التابعة لهذا المستخدم:", "💊 Select assigned individual branches:"))
+                chosen_vendors = st.multiselect(
+                    T("قائمة الفروع (Vendors List):", "Vendors List:"),
+                    options=list(vendor_opts_map.keys()),
+                    default=curr_vids,
+                    format_func=lambda x: vendor_opts_map.get(x, x),
+                    key="edit_user_vendors_multiselect"
+                )
+                e_selected_access_ids_str = ", ".join(chosen_vendors)
+            else:
+                e_access_type = "all"
+                e_selected_access_ids_str = "all"
+
+            st.write("")
+            if st.button(T("💾 حفظ التعديلات وتحديث الصلاحيات", "💾 Save Changes & Permissions"), type="primary", use_container_width=True, key="btn_edit_user_submit"):
+                ok, msg, updated_row = update_user_permissions(
+                    selected_edit_user, 
+                    e_role, 
+                    e_access_type, 
+                    e_selected_access_ids_str, 
+                    edit_password_val, 
+                    current_user_dict=current_user
+                )
+                if ok:
+                    if selected_edit_user.lower() == current_user["email"].lower():
+                        st.session_state["current_user"] = updated_row
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        # -------------------------------------------------------------
+        # 📋 قائمة المستخدمين
+        # -------------------------------------------------------------
         with tab_u3:
             users_list_df = get_users_df()
             display_users_df = users_list_df.copy()
@@ -2452,8 +2529,12 @@ if is_master_admin:
             
             deletable = users_list_df[users_list_df["email"].str.lower() != MASTER_ADMIN_EMAIL.lower()]["email"].tolist()
             if deletable:
-                to_del = st.selectbox(T("اختر المستخدم للحذف:", "Select User to Delete:"), deletable)
-                if st.button(T("حذف الحساب نهائياً", "Delete User"), type="secondary"):
+                st.markdown("---")
+                to_del = st.selectbox(T("اختر المستخدم للحذف:", "Select User to Delete:"), deletable, key="delete_user_select")
+                if st.button(T("حذف الحساب نهائياً", "Delete User"), type="secondary", key="btn_delete_user"):
                     ok, msg = delete_user(to_del, current_user_dict=current_user)
-                    if ok: st.success(msg); st.rerun()
-                    else: st.error(msg)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
