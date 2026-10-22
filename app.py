@@ -301,18 +301,15 @@ def is_valid_am_name(val):
     if s.replace(".", "").isdigit(): return False
     return True
 
-# معالج WKT المطور لدعم كرداسة وناهيا والـ SRID وكافة المحافظات
+# معالج WKT المطور لدعم كرداسة وناهيا وكافة المحافظات
 def clean_wkt(polygon_str):
     if pd.isna(polygon_str) or not str(polygon_str).strip():
         return None
     s = str(polygon_str).strip()
-    # 1. إزالة بادئة PostGIS مثل SRID=4326;
     s = re.sub(r'^SRID=\d+;', '', s, flags=re.IGNORECASE).strip()
-    # 2. تنظيف الفواصل العالقة قبل الأقواس المغلقة
     s = re.sub(r',\s*\)', ')', s)
     s = re.sub(r',\s*\)', ')', s)
     s = re.sub(r'\(\s*,', '(', s)
-    # 3. إزالة المسافات المتكررة
     s = re.sub(r'\s+', ' ', s)
     return s
 
@@ -402,44 +399,6 @@ def read_google_sheet_csv(url):
     except Exception: pass
     try: return pd.read_csv(csv_url)
     except Exception: return pd.DataFrame()
-
-# دالة معالجة مضلعات المناطق الجغرافية بالكامل
-def process_areas_dataframe(df_a):
-    if df_a.empty:
-        return gpd.GeoDataFrame()
-    poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon", "geometry", "geom", "the_geom"])
-    if not poly_col:
-        return gpd.GeoDataFrame()
-        
-    df_a["cleaned_wkt"] = df_a[poly_col].apply(clean_wkt)
-    geometries, valid_indices = [], []
-    for idx, wkt_str in df_a["cleaned_wkt"].items():
-        if pd.notnull(wkt_str):
-            try:
-                geom = wkt.loads(wkt_str)
-                geometries.append(geom)
-                valid_indices.append(idx)
-            except Exception: pass
-                
-    if not valid_indices:
-        return gpd.GeoDataFrame()
-        
-    gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
-    gdf_a["area_size"] = gdf_a["geometry"].area
-    area_name_col = robust_get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name", "Zone", "Area", "Zone Name"])
-    if area_name_col:
-        gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
-        # إزالة مضلعات ماكدونالدز التجريبية فقط دون استبعاد مضلعات المحافظات الكبيرة
-        mask_mcd = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald", case=False, na=False)
-        gdf_a = gdf_a[~mask_mcd].copy()
-        
-    gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
-    centroids = gdf_a.geometry.centroid
-    gdf_a["centroid_lat"] = centroids.y
-    gdf_a["centroid_lng"] = centroids.x
-    # تبسيط المضلعات لتحقيق أقصى سرعة عرض دون التضحية بالدقة
-    gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0008, preserve_topology=True)
-    return gdf_a
 
 # ==========================================
 # 4. جلب وتجهيز البيانات
@@ -549,13 +508,47 @@ def load_data():
         df_d["clean_time"] = df_d[d_time_col].astype(str).str.strip() if d_time_col else ""
         df_d["clean_fee"] = df_d[d_fee_col].astype(str).str.strip() if d_fee_col else ""
 
+        # استبعاد منطقة Egypt Charities نهائياً من شيت التوصيل
+        mask_charity = df_d["clean_zone"].str.contains(r"charit|charities", case=False, na=False)
+        df_d = df_d[~mask_charity].copy()
+
         valid_vids = set(df_v["clean_vid"].unique()) - {""}
         valid_cids = set(df_v["clean_cid"].unique()) - {""}
 
         mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
         df_d = df_d[mask].copy()
 
-    gdf_a = process_areas_dataframe(df_a)
+    if not df_a.empty:
+        poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon", "geometry", "geom", "the_geom"])
+        if poly_col:
+            df_a["cleaned_wkt"] = df_a[poly_col].apply(clean_wkt)
+            geometries, valid_indices = [], []
+            for idx, wkt_str in df_a["cleaned_wkt"].items():
+                if pd.notnull(wkt_str):
+                    try:
+                        geometries.append(wkt.loads(wkt_str))
+                        valid_indices.append(idx)
+                    except Exception: pass
+                        
+            if valid_indices:
+                gdf_a = gpd.GeoDataFrame(df_a.loc[valid_indices], geometry=geometries, crs="EPSG:4326")
+                gdf_a["area_size"] = gdf_a["geometry"].area
+                area_name_col = robust_get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name", "Zone", "Area", "Zone Name"])
+                if area_name_col:
+                    gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
+                    # استبعاد ماكدونالدز التجريبية واستبعاد منطقة Egypt Charities نهائياً
+                    mask_exclude = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald|charit|charities", case=False, na=False)
+                    gdf_a = gdf_a[~mask_exclude].copy()
+                    
+                gdf_a = gdf_a.sort_values(by="area_size", ascending=False)
+                centroids = gdf_a.geometry.centroid
+                gdf_a["centroid_lat"] = centroids.y
+                gdf_a["centroid_lng"] = centroids.x
+                gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0008, preserve_topology=True)
+            else: gdf_a = gpd.GeoDataFrame()
+        else: gdf_a = gpd.GeoDataFrame()
+    else: gdf_a = gpd.GeoDataFrame()
+
     return df_v, gdf_a, df_d, df_p
 
 df_vendors, gdf_areas, df_delivery, df_performance = load_data()
@@ -1004,30 +997,6 @@ with st.sidebar:
     
     if is_admin:
         st.metric(T("🗺️ إجمالي المناطق الجغرافية", "Total Geographic Zones"), f"{len(gdf_areas):,}")
-    
-    # ميزة رفع الشيت الجديد المحدث من البرنامج الأصلي مباشرة
-    st.markdown("---")
-    st.markdown(f"<b>📂 {T('تحديث شيت المضلعات الجديد', 'Update Polygons Sheet')}</b>", unsafe_allow_html=True)
-    uploaded_zones_file = st.file_uploader(
-        T("رفع ملف المناطق (CSV أو Excel):", "Upload Zones File (CSV / Excel):"),
-        type=["csv", "xlsx", "xls"],
-        key="uploader_custom_zones",
-        help=T("ارفع الشيت المسحوب من البرنامج الأصلي وسيقوم النظام بتحديث خريطة مصر بالكامل فوراً.", "Upload the latest export to immediately load all zones.")
-    )
-    if uploaded_zones_file is not None:
-        try:
-            if uploaded_zones_file.name.endswith(".csv"):
-                df_custom = pd.read_csv(uploaded_zones_file)
-            else:
-                df_custom = pd.read_excel(uploaded_zones_file)
-            new_gdf = process_areas_dataframe(df_custom)
-            if not new_gdf.empty:
-                gdf_areas = new_gdf
-                st.success(T(f"✅ تم تحميل {len(gdf_areas):,} منطقة بنجاح!", f"✅ Loaded {len(gdf_areas):,} zones!"))
-            else:
-                st.warning(T("⚠️ لم يتم العثور على عمود Polygon سليم في الملف.", "⚠️ No valid Polygon column found in file."))
-        except Exception as e:
-            st.error(f"خطأ أثناء قراءة الملف: {e}")
 
     if "last_sync_time" not in st.session_state:
         st.session_state["last_sync_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
@@ -1061,7 +1030,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (عرض 100% من مضلعات الجمهورية بدون نقص)
+# Tab 1: Admin Map (عرض كامل المضلعات بدون حذف)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1270,12 +1239,9 @@ if is_admin:
                                 unsafe_allow_html=True
                             )
 
-                # ========================================================
-                # الحل الجذري: عرض كامل المضلعات (كرداسة، ناهيا، والمحافظات)
-                # ========================================================
+                # عرض كامل المضلعات بدون استبعاد
                 gdf_areas_to_render = gpd.GeoDataFrame()
                 if not gdf_areas.empty:
-                    # إذا تم اختيار محافظة محددة وفروعها، نركز المضلعات عليها، عدا ذلك نعرض شبكة الجمهورية كاملة بدون أي حذف
                     if selected_cities and not plot_vendors.empty:
                         minx, miny, maxx, maxy = plot_vendors["lng"].min(), plot_vendors["lat"].min(), plot_vendors["lng"].max(), plot_vendors["lat"].max()
                         bbox = box(minx - 0.25, miny - 0.25, maxx + 0.25, maxy + 0.25)
@@ -1290,7 +1256,6 @@ if is_admin:
                     gdf_areas_to_render = gdf_areas_to_render.sort_values(by="area_size", ascending=False)
                     def assign_zone_styling_and_popup(area_name):
                         z_clean = str(area_name).strip().lower()
-                        # إذا كانت المنطقة مغطاة بصيدلية حالية -> تأخذ لون الصيدلية وبيانات التوصيل
                         if z_clean in zone_to_vendor_info:
                             info_list = zone_to_vendor_info[z_clean]
                             primary_info = info_list[0]
@@ -1298,7 +1263,6 @@ if is_admin:
                             card_html = build_zone_popup_card(area_name, info_list)
                             return prim_hex, prim_hex, 0.45, 2.0, card_html, True
                         
-                        # إذا كانت منطقة عامة مثل كرداسة أو ناهيا -> تظهر بمضلع محدد نظيف وجاهز للإضافة
                         card_html = build_zone_popup_card(area_name, [])
                         return "#a0aec0", "#4a5568", 0.08, 1.2, card_html, False
 
@@ -1464,7 +1428,11 @@ with tab2:
                     "chain": b_row.get("clean_chain_name", "")
                 }
 
-            all_known_zones = sorted(gdf_areas["Delivery Location Area Name"].dropna().unique().tolist()) if not gdf_areas.empty else []
+            # تصفية المناطق مع استبعاد Egypt Charities
+            all_known_zones = sorted([
+                z for z in gdf_areas["Delivery Location Area Name"].dropna().unique() 
+                if not re.search(r"charit|charities", str(z), re.IGNORECASE)
+            ]) if not gdf_areas.empty else []
             zlk = {z.strip().lower(): z for z in all_known_zones}
 
             if st.session_state.get("portal_session_id") != portal_session_key:
@@ -1508,7 +1476,6 @@ with tab2:
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
-            # دليل ألوان السلسلة
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -1538,7 +1505,6 @@ with tab2:
             covered_mask = gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(all_chain_covered_zones) if not gdf_areas.empty else pd.Series(dtype=bool)
             covered_gdf = gdf_areas[covered_mask].copy() if not gdf_areas.empty else gpd.GeoDataFrame()
 
-            # إتاحة عرض كافة المناطق المحيطة بالفرع بما فيها كرداسة وناهيا
             if has_loc and not gdf_areas.empty:
                 valid_coords = vd.dropna(subset=["lat", "lng"])
                 if not valid_coords.empty:
@@ -1561,7 +1527,6 @@ with tab2:
 
             cm, cf = st.columns([6, 4])
 
-            # الخريطة والتحريك والتحديد
             with cm:
                 st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
@@ -1653,7 +1618,6 @@ with tab2:
                         st.session_state["portal_show_diff"] = False
                         st.rerun()
 
-            # لوحة التحكم بجوار الخريطة
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
@@ -1709,7 +1673,6 @@ with tab2:
                     key="portal_action_mode_radio"
                 )
 
-                # 1. وضع تعديل الوقت والرسوم لمناطق حالية
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
@@ -1756,7 +1719,6 @@ with tab2:
                             st.success(T(f"تم حفظ تعديل منطقة {selected_edit_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Saved {selected_edit_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 2. وضع إضافة منطقة لهذا الفرع (يدعم إضافة كرداسة وناهيا وكافة المحافظات)
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
@@ -1809,7 +1771,6 @@ with tab2:
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Added {selected_add_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
-                # 3. وضع إزالة منطقة من هذا الفرع
                 elif "إزالة" in action_mode or "Remove" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
@@ -1846,7 +1807,6 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول حصر التعديلات فقط
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
@@ -1943,7 +1903,7 @@ with tab2:
                         key="portal_diff_editor"
                     )
 
-                    if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary"):
+                    if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
                         for v_id in diff_df["Vendor ID"].unique():
                             b_vname = diff_df[diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
                             branch_indices = diff_df[diff_df["Vendor ID"] == v_id].index
