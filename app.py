@@ -10,6 +10,7 @@ import numpy as np
 import re
 import os
 import io
+import json
 import copy
 import requests
 import smtplib
@@ -26,11 +27,6 @@ st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page
 
 st.markdown("""
 <style>
-/* ==========================================================
-   TALABAT BRANDING THEME (ORANGE & SLEEK MODERN DASHBOARD UI)
-   ========================================================== */
-
-/* كروت مؤشرات الأداء (Metrics) */
 div[data-testid="stMetric"] {
     background: rgba(255, 255, 255, 0.02) !important;
     border: 1px solid rgba(255, 90, 0, 0.22) !important;
@@ -38,11 +34,6 @@ div[data-testid="stMetric"] {
     border-radius: 12px !important;
     padding: 12px 16px !important;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15) !important;
-    transition: transform 0.2s ease, box-shadow 0.2s ease !important;
-}
-div[data-testid="stMetric"]:hover {
-    border-color: rgba(255, 90, 0, 0.5) !important;
-    box-shadow: 0 6px 20px rgba(255, 90, 0, 0.2) !important;
 }
 div[data-testid="stMetricValue"] {
     font-size: 22px !important;
@@ -54,11 +45,6 @@ div[data-testid="stMetricLabel"] {
     color: #c9d1d9 !important;
     font-weight: 600 !important;
 }
-div[data-testid="stMetricDelta"] {
-    font-size: 12px !important;
-}
-
-/* أزرار طلبات الأساسية والثانوية */
 button[kind="primary"], .stButton > button[kind="primary"] {
     background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%) !important;
     color: #ffffff !important;
@@ -67,36 +53,11 @@ button[kind="primary"], .stButton > button[kind="primary"] {
     font-weight: 700 !important;
     padding: 8px 18px !important;
     box-shadow: 0 4px 14px rgba(255, 90, 0, 0.35) !important;
-    transition: all 0.2s ease-in-out !important;
-}
-button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #e04f00 0%, #ff5a00 100%) !important;
-    box-shadow: 0 6px 20px rgba(255, 90, 0, 0.5) !important;
-    transform: translateY(-1px);
 }
 button[kind="secondary"], .stButton > button[kind="secondary"] {
     border: 1px solid rgba(255, 90, 0, 0.4) !important;
     border-radius: 9px !important;
     color: #e2e8f0 !important;
-    transition: all 0.2s ease-in-out !important;
-}
-button[kind="secondary"]:hover, .stButton > button[kind="secondary"]:hover {
-    border-color: #ff5a00 !important;
-    color: #ff5a00 !important;
-    background: rgba(255, 90, 0, 0.08) !important;
-}
-
-/* تبويبات الداشبورد (Tabs) */
-button[data-baseweb="tab"] {
-    font-size: 14.5px !important;
-    font-weight: 600 !important;
-    color: #8b949e !important;
-    border-radius: 8px 8px 0 0 !important;
-    padding: 10px 18px !important;
-    transition: all 0.2s ease-in-out !important;
-}
-button[data-baseweb="tab"]:hover {
-    color: #ff8a00 !important;
 }
 button[data-baseweb="tab"][aria-selected="true"] {
     color: #ff5a00 !important;
@@ -104,73 +65,10 @@ button[data-baseweb="tab"][aria-selected="true"] {
     border-bottom: 3.5px solid #ff5a00 !important;
     background: rgba(255, 90, 0, 0.08) !important;
 }
-div[data-baseweb="tab-highlight"] {
-    background-color: #ff5a00 !important;
-}
-div[data-baseweb="tab-border"] {
-    background-color: rgba(255, 90, 0, 0.2) !important;
-}
-
-/* القائمة الجانبية (Sidebar) */
 section[data-testid="stSidebar"] {
     border-left: 1px solid rgba(255, 90, 0, 0.2) !important;
     border-right: 1px solid rgba(255, 90, 0, 0.2) !important;
     background: linear-gradient(180deg, rgba(255, 90, 0, 0.06) 0%, rgba(14, 17, 23, 0) 100%) !important;
-}
-
-/* عناصر الإدخال، الاختيار والقوائم */
-div[data-baseweb="input"]:focus-within,
-div[data-baseweb="select"]:focus-within {
-    border-color: #ff5a00 !important;
-    box-shadow: 0 0 0 1px #ff5a00 !important;
-}
-span[data-baseweb="tag"] {
-    background-color: rgba(255, 90, 0, 0.16) !important;
-    color: #ff5a00 !important;
-    border: 1px solid rgba(255, 90, 0, 0.4) !important;
-    border-radius: 6px !important;
-}
-div[data-baseweb="radio"] div[aria-checked="true"] {
-    background-color: #ff5a00 !important;
-    border-color: #ff5a00 !important;
-}
-div[data-baseweb="checkbox"] div[aria-checked="true"] {
-    background-color: #ff5a00 !important;
-    border-color: #ff5a00 !important;
-}
-div[data-baseweb="slider"] div[role="slider"] {
-    background-color: #ff5a00 !important;
-    border-color: #ff5a00 !important;
-}
-div[data-baseweb="slider"] div[data-testid="stSliderTickBar"] {
-    background-color: #ff5a00 !important;
-}
-div[data-testid="stToggleSwitch"] input:checked + div {
-    background-color: #ff5a00 !important;
-}
-
-/* بطاقة تسجيل الدخول */
-form[data-testid="stForm"] {
-    border: 1px solid rgba(255, 90, 0, 0.3) !important;
-    border-top: 4px solid #ff5a00 !important;
-    border-radius: 16px !important;
-    padding: 24px 22px !important;
-    background: rgba(22, 27, 34, 0.7) !important;
-    backdrop-filter: blur(12px) !important;
-    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35) !important;
-}
-
-/* نوافذ الخريطة المنبثقة */
-.leaflet-popup-content-wrapper {
-    border-radius: 8px !important;
-    padding: 2px !important;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
-}
-.leaflet-popup-content {
-    margin: 6px 8px !important;
-    line-height: 1.3 !important;
-    max-height: 190px !important;
-    overflow-y: auto !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -186,7 +84,7 @@ BRANCH_PALETTE = [
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
     {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
@@ -200,32 +98,80 @@ BRANCH_PALETTE = [
 ]
 
 # ==========================================
-# 2. إدارة المستخدمين وإعدادات البريد
+# 2. إدارة المستخدمين وقاعدة البيانات وإعدادات البريد
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
+SMTP_CONFIG_FILE = "smtp_config.json"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
-
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SMTP_SENDER_EMAIL = ""
-SMTP_SENDER_PASSWORD = ""
-TARGET_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
-
-try:
-    if "smtp" in st.secrets:
-        SMTP_SERVER = st.secrets["smtp"].get("server", SMTP_SERVER)
-        SMTP_PORT = int(st.secrets["smtp"].get("port", SMTP_PORT))
-        SMTP_SENDER_EMAIL = st.secrets["smtp"].get("sender_email", SMTP_SENDER_EMAIL)
-        SMTP_SENDER_PASSWORD = st.secrets["smtp"].get("sender_password", SMTP_SENDER_PASSWORD)
-        TARGET_ADMIN_EMAIL = st.secrets["smtp"].get("recipient_email", TARGET_ADMIN_EMAIL)
-except Exception:
-    pass
 
 REQUESTS_COLUMNS = [
     "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
     "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Final_Status", "Status"
 ]
+
+def load_smtp_config():
+    cfg = {
+        "server": "smtp.gmail.com",
+        "port": 587,
+        "sender_email": "",
+        "sender_password": "",
+        "admin_email": MASTER_ADMIN_EMAIL
+    }
+    if os.path.exists(SMTP_CONFIG_FILE):
+        try:
+            with open(SMTP_CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                cfg.update(saved)
+        except Exception: pass
+    try:
+        if "smtp" in st.secrets:
+            cfg["server"] = st.secrets["smtp"].get("server", cfg["server"])
+            cfg["port"] = int(st.secrets["smtp"].get("port", cfg["port"]))
+            cfg["sender_email"] = st.secrets["smtp"].get("sender_email", cfg["sender_email"])
+            cfg["sender_password"] = st.secrets["smtp"].get("sender_password", cfg["sender_password"])
+            cfg["admin_email"] = st.secrets["smtp"].get("recipient_email", cfg["admin_email"])
+    except Exception: pass
+    return cfg
+
+def save_smtp_config(server, port, sender_email, sender_password, admin_email):
+    data = {
+        "server": str(server).strip(),
+        "port": int(port),
+        "sender_email": str(sender_email).strip(),
+        "sender_password": str(sender_password).strip(),
+        "admin_email": str(admin_email).strip()
+    }
+    try:
+        with open(SMTP_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True, "تم حفظ إعدادات خادم البريد بنجاح!"
+    except Exception as e:
+        return False, f"فشل حفظ الإعدادات: {e}"
+
+def test_smtp_connection(server_host, port_num, sender, password, recipient):
+    if not sender or not password:
+        return False, "بيانات الراسل ناقصة: يرجى إدخال البريد الإلكتروني وكلمة مرور التطبيق."
+    try:
+        msg = MIMEText("This is a test notification from Talabat Operations Platform.", "plain", "utf-8")
+        msg["Subject"] = "🧪 Test Email - Talabat Operations Hub"
+        msg["From"] = f"Talabat Operations Hub <{sender}>"
+        msg["To"] = recipient
+
+        if int(port_num) == 465:
+            server = smtplib.SMTP_SSL(server_host, int(port_num), timeout=12)
+        else:
+            server = smtplib.SMTP(server_host, int(port_num), timeout=12)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+
+        server.login(sender, password)
+        server.sendmail(sender, [recipient], msg.as_string())
+        server.quit()
+        return True, f"نجح الاتصال! تم إرسال إيميل تجريبي بنجاح إلى: {recipient}"
+    except Exception as e:
+        return False, f"فشل الاتصال بخادم البريد: {e}"
 
 def init_users_db():
     if not os.path.exists(USERS_FILE):
@@ -301,7 +247,7 @@ def delete_user(email, current_user_dict=None):
     return True, T("تم حذف الحساب بنجاح!", "User deleted successfully!")
 
 # ==========================================
-# 3. دوال المعالجة المتقدمة للـ WKT والمطابقة الذكية
+# 3. دوال المعالجة والمطابقة الذكية للمناطق
 # ==========================================
 def normalize_id(val):
     if pd.isna(val): return ""
@@ -362,10 +308,8 @@ def calc_vendor_zone_distance(vid, zone_name, df_v, gdf_a):
         
     z_clean = str(zone_name).strip().lower()
     z_match = gdf_a[gdf_a["Delivery Location Area Name"].astype(str).str.strip().str.lower() == z_clean]
-    if z_match.empty:
-        z_norm = normalize_zone_key(zone_name)
-        if "norm_key" in gdf_a.columns:
-            z_match = gdf_a[gdf_a["norm_key"] == z_norm]
+    if z_match.empty and "norm_key" in gdf_a.columns:
+        z_match = gdf_a[gdf_a["norm_key"] == normalize_zone_key(zone_name)]
             
     if z_match.empty:
         return "-"
@@ -541,15 +485,8 @@ def load_data():
         df_d["clean_time"] = df_d[d_time_col].astype(str).str.strip() if d_time_col else ""
         df_d["clean_fee"] = df_d[d_fee_col].astype(str).str.strip() if d_fee_col else ""
 
-        # استبعاد منطقة Egypt Charities نهائياً
         mask_charity = df_d["clean_zone"].str.contains(r"charit|charities", case=False, na=False)
         df_d = df_d[~mask_charity].copy()
-
-        valid_vids = set(df_v["clean_vid"].unique()) - {""}
-        valid_cids = set(df_v["clean_cid"].unique()) - {""}
-
-        mask = (df_d["clean_vid"].isin(valid_vids)) | (df_d["clean_cid"].isin(valid_cids))
-        df_d = df_d[mask].copy()
 
     if not df_a.empty:
         poly_col = robust_get_col(df_a, ["Delivery Location Area Polygon", "Polygon", "WKT", "Area Polygon", "geometry", "geom", "the_geom"])
@@ -725,20 +662,16 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
 
 # دالة إرسال الإشعارات بالإنجليزية مع شيت الإكسيل (للأدمن وللفيندور)
-def send_request_emails(vendor_id, vendor_name, records_df, 
-                        submitted_by_email,
-                        sender_email=None, sender_password=None, 
-                        smtp_server="smtp.gmail.com", smtp_port=587, 
-                        admin_recipient="mahmoud.alaa.2@talabat.com"):
-    
-    sender_email = sender_email or SMTP_SENDER_EMAIL
-    sender_password = sender_password or SMTP_SENDER_PASSWORD
-    smtp_server = smtp_server or SMTP_SERVER
-    smtp_port = smtp_port or SMTP_PORT
-    admin_recipient = admin_recipient or TARGET_ADMIN_EMAIL
+def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
+    smtp_cfg = load_smtp_config()
+    sender_email = smtp_cfg.get("sender_email", "").strip()
+    sender_password = smtp_cfg.get("sender_password", "").strip()
+    smtp_server = smtp_cfg.get("server", "smtp.gmail.com")
+    smtp_port = int(smtp_cfg.get("port", 587))
+    admin_recipient = smtp_cfg.get("admin_email", MASTER_ADMIN_EMAIL)
 
     if not sender_email or not sender_password:
-        return False, "Email notification skipped: SMTP credentials not set."
+        return False, "⚠️ تم حفظ الطلب، ولكن لم يتم إرسال الإيميل لعدم ضبط بيانات الراسل (SMTP Sender) في إعدادات البريد بتبويب Users & Access."
 
     try:
         date_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
@@ -757,9 +690,9 @@ def send_request_emails(vendor_id, vendor_name, records_df,
         deact_count = len(records_df[records_df["Action"].astype(str).str.contains("إلغاء|Deactivate", case=False)])
 
         if smtp_port == 465:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=12)
         else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=12)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -845,8 +778,8 @@ def send_request_emails(vendor_id, vendor_name, records_df,
         server.sendmail(sender_email, [admin_recipient], msg_admin.as_string())
         recipients_status.append(admin_recipient)
 
-        # 2. إيميل تأكيد الفيندور مع الإكسيل
-        if submitted_by_email and submitted_by_email.strip() and "@" in submitted_by_email:
+        # 2. إيميل الفيندور مع الإكسيل
+        if submitted_by_email and str(submitted_by_email).strip() and "@" in str(submitted_by_email):
             vendor_subject = f"✅ Request Received: Pricing & Coverage Update - {vendor_name} (ID: {vendor_id})"
             vendor_html = f"""
             <!DOCTYPE html>
@@ -921,7 +854,7 @@ def send_request_emails(vendor_id, vendor_name, records_df,
             part_vendor.add_header('Content-Disposition', f'attachment; filename="{filename}"')
             msg_vendor.attach(part_vendor)
 
-            if submitted_by_email.lower() != admin_recipient.lower():
+            if str(submitted_by_email).lower() != admin_recipient.lower():
                 server.sendmail(sender_email, [submitted_by_email], msg_vendor.as_string())
                 recipients_status.append(submitted_by_email)
 
@@ -1480,7 +1413,6 @@ if is_admin:
                                 unsafe_allow_html=True
                             )
 
-                # عرض كامل المضلعات بدون استبعاد
                 gdf_areas_to_render = gpd.GeoDataFrame()
                 if not gdf_areas.empty:
                     if selected_cities and not plot_vendors.empty:
@@ -1591,7 +1523,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع حل مشكلة جلب مناطق التغطية بدقة)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1674,13 +1606,11 @@ with tab2:
                     "chain": b_row.get("clean_chain_name", "")
                 }
 
-            # تصفية المناطق مع استبعاد Egypt Charities
             all_known_zones = sorted([
                 z for z in gdf_areas["Delivery Location Area Name"].dropna().unique() 
                 if not re.search(r"charit|charities", str(z), re.IGNORECASE)
             ]) if not gdf_areas.empty else []
             
-            # قواميس المطابقة الذكية للمناطق
             zlk_exact = {z.strip().lower(): z for z in all_known_zones}
             zlk_norm = {normalize_zone_key(z): z for z in all_known_zones}
 
@@ -1697,14 +1627,12 @@ with tab2:
                     if k in norm or norm in k: return v
                 return raw_str
 
-            # تهيئة مناطق التغطية الحالية للفرع/السلسلة بحل البحث المزدوج
             if st.session_state.get("portal_session_id") != portal_session_key:
                 st.session_state["portal_session_id"] = portal_session_key
                 original_alloc = {str(b_vid): {} for b_vid in branch_names.keys()}
                 
                 vids_in_scope = set(branch_names.keys())
                 if not df_delivery.empty:
-                    # 1. البحث بكود الفرع أو بكود السلسلة في حال كان الفرع يتبع نفس السلسلة
                     mask_vid = df_delivery["clean_vid"].isin(vids_in_scope)
                     mask_cid = (df_delivery["clean_cid"] == str(found_cid)) & ((df_delivery["clean_vid"] == "") | (~df_delivery["clean_vid"].isin(df_vendors["clean_vid"].unique())))
                     m_del = df_delivery[mask_vid | mask_cid].copy()
@@ -1799,7 +1727,6 @@ with tab2:
 
             cm, cf = st.columns([6, 4])
 
-            # الخريطة والتحريك والتحديد
             with cm:
                 st.subheader(f"🗺️ Map ({len([z for v in working_alloc.values() for z in v])} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
@@ -1893,7 +1820,6 @@ with tab2:
                         st.session_state["portal_show_diff"] = False
                         st.rerun()
 
-            # لوحة التحكم بجوار الخريطة
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
@@ -2083,7 +2009,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول مراجعة المناطق المعدلة مع إمكانية حذف واستبعاد أي تعديل بالكامل
+            # جدول مراجعة التعديلات مع خاصية استبعاد المناطق المحددة
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
@@ -2188,13 +2114,11 @@ with tab2:
                         key="portal_diff_editor"
                     )
 
-                    # أزرار الإجراءات: الاعتماد أو استبعاد مناطق محددة أو التراجع عن الكل
                     c_act1, c_act2, c_act3 = st.columns([1.6, 1.4, 1.0])
 
                     with c_act1:
                         if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
                             mail_notifs = []
-                            # تصفية المناطق غير المستبعدة فقط
                             valid_indices = [idx_r for idx_r, r in edited_diff.iterrows() if not r.get("Discard", False)]
                             filtered_diff_df = diff_df.loc[valid_indices].copy()
 
@@ -2246,18 +2170,15 @@ with tab2:
                                 st.rerun()
 
                     with c_act2:
-                        # زر حذف واستبعاد المناطق المحددة بالصح
                         if st.button(T("🗑️ حذف المناطق المحددة بالصح", "🗑️ Discard Selected Zones"), type="secondary", use_container_width=True):
                             discarded_count = 0
                             for idx_row, r_edit in edited_diff.iterrows():
                                 if r_edit.get("Discard", False):
                                     row_vid = diff_df.loc[idx_row, "Vendor ID"]
                                     row_zone = diff_df.loc[idx_row, "Zone"]
-                                    # إذا كانت مسجلة أصلاً -> نعيدها لحالتها الأصلية
                                     if row_vid in orig_alloc and row_zone in orig_alloc[row_vid]:
                                         working_alloc[row_vid][row_zone] = copy.deepcopy(orig_alloc[row_vid][row_zone])
                                     else:
-                                        # إذا كانت مضافة حديثاً -> نحذفها تماماً من الـ working_alloc
                                         if row_vid in working_alloc and row_zone in working_alloc[row_vid]:
                                             del working_alloc[row_vid][row_zone]
                                     discarded_count += 1
@@ -2269,7 +2190,6 @@ with tab2:
                                 st.warning(T("يرجى تحديد خانة '🗑️ استبعاد' بجانب المنطقة المراد حذفها من الجدول أولاً.", "Please check 'Discard' column first."))
 
                     with c_act3:
-                        # زر التراجع عن كل التعديلات دفعة واحدة
                         if st.button(T("🔄 تراجع عن الكل", "🔄 Revert All"), use_container_width=True):
                             st.session_state["portal_working_alloc"] = copy.deepcopy(orig_alloc)
                             st.session_state["portal_show_diff"] = False
@@ -2408,11 +2328,11 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع. (عند إرسال أي تعديل من Vendor Portal سيظهر هنا فوراً)", "📭 No incoming requests found. Submit modifications in Vendor Portal to view them here."))
 
 # ==========================================
-# Tab 4: Users Management
+# Tab 4: Users Management & Email Settings
 # ==========================================
 if is_master_admin:
     with tab4:
-        st.header(T("👥 إدارة المستخدمين والصلاحيات (الأدمن الرئيسي)", "👥 User Management & Permissions (Master Admin Only)"))
+        st.header(T("👥 إدارة المستخدمين والصلاحيات وإعدادات البريد (الأدمن الرئيسي)", "👥 User Management & Email Settings (Master Admin Only)"))
         st.caption(T(f"🔒 صلاحية الوصول لهذه الشاشة محصورة ببريد: `{MASTER_ADMIN_EMAIL}`", f"🔒 Access strictly restricted to: `{MASTER_ADMIN_EMAIL}`"))
         
         valid_chains_data = df_vendors[df_vendors["clean_cid"] != ""].copy()
@@ -2434,10 +2354,11 @@ if is_master_admin:
                 chain_suffix = f" [سلسلة: {v_chain_name}]" if v_chain_name and v_chain_name not in ["", "nan", "None", "-"] else ""
                 vendor_opts_map[vid_val] = f"💊 {v_display_name} (ID: {vid_val}{chain_suffix})"
 
-        tab_u1, tab_u2, tab_u3 = st.tabs([
+        tab_u1, tab_u2, tab_u3, tab_u4 = st.tabs([
             T("➕ إضافة مستخدم جديد", "➕ Add New User"),
             T("✏️ تعديل صلاحيات وكلمة مرور مستخدم", "✏️ Edit Permissions & Password"),
-            T("📋 قائمة المستخدمين", "📋 Users List")
+            T("📋 قائمة المستخدمين", "📋 Users List"),
+            T("📧 إعدادات واختبار البريد (Email SMTP Settings)", "📧 Email SMTP Settings")
         ])
         
         with tab_u1:
@@ -2616,3 +2537,49 @@ if is_master_admin:
                         st.rerun()
                     else:
                         st.error(msg)
+
+        # -------------------------------------------------------------
+        # 📧 إعدادات واختبار البريد الإلكتروني (SMTP Settings & Live Test)
+        # -------------------------------------------------------------
+        with tab_u4:
+            st.subheader(T("⚙️ إعدادات واختبار خادم البريد الإلكتروني (SMTP Settings)", "⚙️ SMTP Settings & Live Test"))
+            st.caption(T(
+                "اضبط بريد الراسل وكلمة مرور التطبيق هنا لكي يقوم النظام بإرسال الإيميلات وشيتات الإكسيل تلقائياً لك وللفيندور عند تقديم أي طلب.",
+                "Configure sender email & App Password to automatically dispatch notification emails with Excel attachments."
+            ))
+            
+            curr_smtp = load_smtp_config()
+            
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                cfg_server = st.text_input("SMTP Server:", value=curr_smtp.get("server", "smtp.gmail.com"), key="smtp_cfg_server")
+                cfg_sender = st.text_input(T("بريد الراسل (Sender Email):", "Sender Email:"), value=curr_smtp.get("sender_email", ""), placeholder="e.g. notifications@talabat.com", key="smtp_cfg_sender")
+                cfg_admin = st.text_input(T("بريد استلام الإشعارات (Admin Recipient):", "Admin Recipient:"), value=curr_smtp.get("admin_email", MASTER_ADMIN_EMAIL), key="smtp_cfg_admin")
+            with sc2:
+                cfg_port = st.selectbox("SMTP Port:", [587, 465], index=0 if curr_smtp.get("port", 587) == 587 else 1, key="smtp_cfg_port")
+                cfg_pass = st.text_input(
+                    T("كلمة مرور التطبيقات (App Password - 16 حرفاً):", "Sender App Password (16 chars):"),
+                    value=curr_smtp.get("sender_password", ""),
+                    type="password",
+                    placeholder="xxxx xxxx xxxx xxxx",
+                    help=T("استخرج كلمة مرور تطبيقات مكونة من 16 حرفاً من إعدادات أمان حساب جوجل.", "Generate a 16-character App Password from Google Account Security."),
+                    key="smtp_cfg_pass"
+                )
+
+            st.write("")
+            btn_save_col, btn_test_col = st.columns(2)
+            
+            with btn_save_col:
+                if st.button(T("💾 حفظ إعدادات البريد", "💾 Save SMTP Settings"), type="primary", use_container_width=True, key="btn_save_smtp"):
+                    ok_s, msg_s = save_smtp_config(cfg_server, cfg_port, cfg_sender, cfg_pass, cfg_admin)
+                    if ok_s: st.success(msg_s)
+                    else: st.error(msg_s)
+
+            with btn_test_col:
+                if st.button(T("🧪 إرسال إيميل تجريبي الآن (Send Test Email)", "🧪 Send Test Email Now"), type="secondary", use_container_width=True, key="btn_test_smtp"):
+                    with st.spinner(T("جارٍ الاتصال بخادم البريد وإرسال الرسالة التجريبية...", "Connecting and sending test email...")):
+                        test_ok, test_msg = test_smtp_connection(cfg_server, cfg_port, cfg_sender, cfg_pass, cfg_admin)
+                        if test_ok:
+                            st.success(f"✅ {test_msg}")
+                        else:
+                            st.error(f"❌ {test_msg}")
