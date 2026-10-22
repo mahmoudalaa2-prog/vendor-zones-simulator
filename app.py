@@ -11,6 +11,11 @@ import re
 import os
 import io
 import requests
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import datetime
 
 # ==========================================
@@ -194,11 +199,28 @@ BRANCH_PALETTE = [
 ]
 
 # ==========================================
-# 2. إدارة المستخدمين وقاعدة البيانات الأمنية
+# 2. إدارة المستخدمين وقاعدة البيانات وإعدادات البريد
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
+
+# إعدادات خادم البريد التلقائي
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_SENDER_EMAIL = ""       # ضع بريد الراسل هنا
+SMTP_SENDER_PASSWORD = ""    # ضع كلمة مرور التطبيقات App Password المكونة من 16 حرفاً
+TARGET_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
+
+try:
+    if "smtp" in st.secrets:
+        SMTP_SERVER = st.secrets["smtp"].get("server", SMTP_SERVER)
+        SMTP_PORT = int(st.secrets["smtp"].get("port", SMTP_PORT))
+        SMTP_SENDER_EMAIL = st.secrets["smtp"].get("sender_email", SMTP_SENDER_EMAIL)
+        SMTP_SENDER_PASSWORD = st.secrets["smtp"].get("sender_password", SMTP_SENDER_PASSWORD)
+        TARGET_ADMIN_EMAIL = st.secrets["smtp"].get("recipient_email", TARGET_ADMIN_EMAIL)
+except Exception:
+    pass
 
 REQUESTS_COLUMNS = [
     "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
@@ -301,7 +323,6 @@ def is_valid_am_name(val):
     if s.replace(".", "").isdigit(): return False
     return True
 
-# معالج WKT المطور لدعم كرداسة وناهيا وكافة المحافظات
 def clean_wkt(polygon_str):
     if pd.isna(polygon_str) or not str(polygon_str).strip():
         return None
@@ -688,6 +709,223 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
         save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
     except Exception: pass
 
+    return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
+
+# ==========================================
+# دالة إرسال الإشعارات بالإنجليزية مع شيت الإكسيل (للأدمن والفيندور)
+# ==========================================
+def send_request_emails(vendor_id, vendor_name, records_df, 
+                        submitted_by_email,
+                        sender_email=None, sender_password=None, 
+                        smtp_server="smtp.gmail.com", smtp_port=587, 
+                        admin_recipient="mahmoud.alaa.2@talabat.com"):
+    
+    sender_email = sender_email or SMTP_SENDER_EMAIL
+    sender_password = sender_password or SMTP_SENDER_PASSWORD
+    smtp_server = smtp_server or SMTP_SERVER
+    smtp_port = smtp_port or SMTP_PORT
+    admin_recipient = admin_recipient or TARGET_ADMIN_EMAIL
+
+    if not sender_email or not sender_password:
+        return False, "Email notification skipped: SMTP sender credentials not configured in code/secrets."
+
+    try:
+        date_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        
+        # 1. إنشاء ملف الإكسيل في الذاكرة
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            records_df.to_excel(writer, index=False, sheet_name=f"Vendor_{str(vendor_id)[:10]}")
+        excel_bytes = excel_buffer.getvalue()
+
+        safe_name = re.sub(r'[^\w\s-]', '', str(vendor_name)).strip().replace(" ", "_")
+        filename = f"Pricing_Request_{vendor_id}_{safe_name}.xlsx"
+
+        # الإحصائيات
+        total_count = len(records_df)
+        add_count = len(records_df[records_df["Action"].astype(str).str.contains("نشط|Active|New", case=False)])
+        edit_count = len(records_df[records_df["Action"].astype(str).str.contains("Edit|تعديل", case=False)])
+        deact_count = len(records_df[records_df["Action"].astype(str).str.contains("إلغاء|Deactivate", case=False)])
+
+        # الاتصال بخادم البريد
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        server.login(sender_email, sender_password)
+
+        recipients_status = []
+
+        # -------------------------------------------------------------
+        # 1. إيميل الأدمن (محمود علاء) باللغة الإنجليزية
+        # -------------------------------------------------------------
+        admin_subject = f"🔔 [Action Required] Pricing & Coverage Request - {vendor_name} (ID: {vendor_id})"
+        admin_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; }}
+                .card {{ max-width: 620px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }}
+                .header {{ background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%); color: #ffffff; padding: 24px 28px; text-align: left; }}
+                .header h1 {{ margin: 0; font-size: 20px; font-weight: 800; }}
+                .header p {{ margin: 6px 0 0 0; font-size: 13px; opacity: 0.9; letter-spacing: 0.3px; }}
+                .content {{ padding: 28px; line-height: 1.6; text-align: left; }}
+                .box {{ background: #fff7ed; border-left: 4px solid #ff5a00; padding: 14px 18px; border-radius: 6px; margin: 18px 0; }}
+                .table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                .table th, .table td {{ padding: 10px 14px; border-bottom: 1px solid #edf2f7; font-size: 13px; text-align: left; }}
+                .table th {{ background: #f8fafc; color: #64748b; font-weight: 600; width: 50%; }}
+                .notice {{ background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin: 20px 0; }}
+                .footer {{ background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; padding: 14px; font-size: 11.5px; color: #94a3b8; }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <div class="header">
+                    <h1>💊 New Pricing & Coverage Submission</h1>
+                    <p>Talabat Pharmacy Operations & Logistics Platform</p>
+                </div>
+                <div class="content">
+                    <p style="font-size: 15px; margin-top: 0;">Dear <b>Mahmoud Alaa</b>,</p>
+                    <p>A new delivery zone & pricing configuration has just been submitted via the <b>Vendor Portal</b>. Please find the operational details below:</p>
+                    
+                    <div class="box">
+                        <div style="font-size: 16px; font-weight: 800; color: #ea580c;">🏬 {vendor_name}</div>
+                        <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>Vendor ID:</b> <code>{vendor_id}</code></div>
+                        <div style="font-size: 13px; color: #334155; margin-top: 2px;"><b>Submitted By:</b> {submitted_by_email}</div>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>Timestamp:</b> {date_str}</div>
+                    </div>
+
+                    <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📊 Submission Summary:</h4>
+                    <table class="table">
+                        <tr><th>Total Zones in Request</th><td><b>{total_count}</b> zones</td></tr>
+                        <tr><th>Newly Added Zones</th><td style="color:#16a34a; font-weight:bold;">+{add_count}</td></tr>
+                        <tr><th>Updated Zones (Fee / SLA)</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
+                        <tr><th>Deactivated Zones</th><td style="color:#dc2626; font-weight:bold;">-{deact_count}</td></tr>
+                    </table>
+
+                    <div class="notice">
+                        📎 <b>Attachment:</b> Complete Excel workbook <code>{filename}</code> is attached containing exact polygon coordinates, computed distance (km), delivery fees, and SLAs.
+                    </div>
+
+                    <p style="font-size: 13px; color: #64748b;">
+                        You can review, export, or audit this submission at any time under the <b>Incoming Requests</b> tab in the admin dashboard.
+                    </p>
+                </div>
+                <div class="footer">
+                    Automated System Notification • Talabat Logistics & Operations Engine
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        msg_admin = MIMEMultipart()
+        msg_admin['Subject'] = admin_subject
+        msg_admin['From'] = f"Talabat Operations Hub <{sender_email}>"
+        msg_admin['To'] = admin_recipient
+        msg_admin.attach(MIMEText(admin_html, 'html', 'utf-8'))
+
+        part_admin = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        part_admin.set_payload(excel_bytes)
+        encoders.encode_base64(part_admin)
+        part_admin.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+        msg_admin.attach(part_admin)
+
+        server.sendmail(sender_email, [admin_recipient], msg_admin.as_string())
+        recipients_status.append(admin_recipient)
+
+        # -------------------------------------------------------------
+        # 2. إيميل الفيندور (Vendor Confirmation) باللغة الإنجليزية مع الإكسيل
+        # -------------------------------------------------------------
+        if submitted_by_email and submitted_by_email.strip() and "@" in submitted_by_email:
+            vendor_subject = f"✅ Request Received: Pricing & Coverage Update - {vendor_name} (ID: {vendor_id})"
+            vendor_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; }}
+                    .card {{ max-width: 620px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }}
+                    .header {{ background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%); color: #ffffff; padding: 24px 28px; text-align: left; }}
+                    .header h1 {{ margin: 0; font-size: 20px; font-weight: 800; }}
+                    .header p {{ margin: 6px 0 0 0; font-size: 13px; opacity: 0.9; letter-spacing: 0.3px; }}
+                    .content {{ padding: 28px; line-height: 1.6; text-align: left; }}
+                    .box {{ background: #f0fdf4; border-left: 4px solid #16a34a; padding: 14px 18px; border-radius: 6px; margin: 18px 0; }}
+                    .table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                    .table th, .table td {{ padding: 10px 14px; border-bottom: 1px solid #edf2f7; font-size: 13px; text-align: left; }}
+                    .table th {{ background: #f8fafc; color: #64748b; font-weight: 600; width: 50%; }}
+                    .notice {{ background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin: 20px 0; }}
+                    .footer {{ background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; padding: 14px; font-size: 11.5px; color: #94a3b8; }}
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="header">
+                        <h1>✅ Request Successfully Received</h1>
+                        <p>Talabat Vendor Portal & Support</p>
+                    </div>
+                    <div class="content">
+                        <p style="font-size: 15px; margin-top: 0;">Dear <b>{vendor_name} Team</b>,</p>
+                        <p>Thank you for submitting your updated delivery zones and pricing configuration. We have received your submission and it has been routed to our Operations team for verification.</p>
+                        
+                        <div class="box">
+                            <div style="font-size: 16px; font-weight: 800; color: #15803d;">🏬 {vendor_name}</div>
+                            <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>Vendor ID:</b> <code>{vendor_id}</code></div>
+                            <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>Submission Time:</b> {date_str}</div>
+                        </div>
+
+                        <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📋 Summary of Submitted Changes:</h4>
+                        <table class="table">
+                            <tr><th>Total Zones Submitted</th><td><b>{total_count}</b> zones</td></tr>
+                            <tr><th>New Zone Additions</th><td style="color:#16a34a; font-weight:bold;">+{add_count}</td></tr>
+                            <tr><th>Pricing & SLA Updates</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
+                            <tr><th>Deactivated Zones</th><td style="color:#dc2626; font-weight:bold;">-{deact_count}</td></tr>
+                        </table>
+
+                        <div class="notice">
+                            📎 <b>Your Submission Record:</b> Attached to this email is <code>{filename}</code> with the complete breakdown of zones, proposed delivery fees, and estimated delivery times for your records.
+                        </div>
+
+                        <p style="font-size: 13px; color: #64748b;">
+                            <b>What happens next?</b><br>
+                            Our operations team will review the distance parameters and delivery SLAs. Once approved, the changes will take effect live on the platform.
+                        </p>
+                    </div>
+                    <div class="footer">
+                        Talabat Vendor Support & Logistics Operations • Egypt
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+
+            msg_vendor = MIMEMultipart()
+            msg_vendor['Subject'] = vendor_subject
+            msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
+            msg_vendor['To'] = submitted_by_email
+            msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
+
+            part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            part_vendor.set_payload(excel_bytes)
+            encoders.encode_base64(part_vendor)
+            part_vendor.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            msg_vendor.attach(part_vendor)
+
+            if submitted_by_email.lower() != admin_recipient.lower():
+                server.sendmail(sender_email, [submitted_by_email], msg_vendor.as_string())
+                recipients_status.append(submitted_by_email)
+
+        server.quit()
+        return True, f"Emails & Excel attachments delivered to: {', '.join(recipients_status)}"
+    except Exception as e:
+        return False, f"Email delivery failed: {e}"
+
 def get_all_requests_df():
     init_requests_db()
     file_records = []
@@ -715,10 +953,9 @@ def get_all_requests_df():
 def build_zone_popup_card(area_name, info_list):
     if not info_list:
         return (
-            "<div style='font-family: Arial, sans-serif; font-size: 11px; width: 210px; padding: 4px; direction: rtl; text-align: right;'>"
-            + "<b style='color: #ff5a00; font-size: 12px;'>📍 " + str(area_name) + "</b><br>"
-            + "<span style='color: #6c757d; font-size: 10px;'>منطقة عامة (غير مغطاة حالياً)</span><br>"
-            + "<span style='color: #28a745; font-size: 9.5px; font-weight: bold;'>متاحة للإضافة لأي فرع عبر Vendor Portal</span>"
+            "<div style='font-family: Arial, sans-serif; font-size: 10.5px; width: 200px; padding: 3px; direction: rtl; text-align: right;'>"
+            + "<b style='color: #ff5a00;'>📍 " + str(area_name) + "</b><br>"
+            + "<span style='color: #6c757d; font-size: 9.5px;'>منطقة عامة (غير مغطاة حالياً)</span>"
             + "</div>"
         )
     
@@ -824,7 +1061,7 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     return None, None
 
 # ==========================================
-# 5. شاشة تسجيل الدخول
+# 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
 # ==========================================
 init_users_db()
 init_requests_db()
@@ -1012,7 +1249,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي
+# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي mahmoud.alaa.2@talabat.com
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1030,7 +1267,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (عرض كامل المضلعات بدون حذف)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -1300,9 +1537,9 @@ if is_admin:
                         gdf_areas_to_render[["Delivery Location Area Name", "popup_html", "fill_color", "border_color", "fill_opacity", "weight", "geometry"]].to_json(),
                         name="Delivery Zones",
                         style_function=lambda feature: {
-                            "fillColor": feature["properties"].get("fill_color", "#a0aec0"),
-                            "color": feature["properties"].get("border_color", "#4a5568"),
-                            "weight": feature["properties"].get("weight", 1.2),
+                            "fillColor": feature["properties"].get("fill_color", "#3388ff"),
+                            "color": feature["properties"].get("border_color", "#002266"),
+                            "weight": feature["properties"].get("weight", 1.0),
                             "fillOpacity": feature["properties"].get("fill_opacity", 0.08)
                         },
                         highlight_function=lambda feature: {
@@ -1350,11 +1587,17 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (التبديل الذكي للوضع + التحديد من أول كليك)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
     
+    # عرض رسائل النجاح السابقة بعد التحديث
+    if "submission_success_msg" in st.session_state:
+        st.success(st.session_state.pop("submission_success_msg"))
+    if "submission_mail_info" in st.session_state:
+        st.info(st.session_state.pop("submission_mail_info"))
+
     t_vid = ""
     p_vends = pd.DataFrame()
 
@@ -1476,6 +1719,7 @@ with tab2:
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
+            # دليل ألوان السلسلة
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -1527,6 +1771,7 @@ with tab2:
 
             cm, cf = st.columns([6, 4])
 
+            # الخريطة والتحريك والتحديد
             with cm:
                 st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
@@ -1565,7 +1810,7 @@ with tab2:
                             icon=folium.Icon(color="red" if is_active_b else b_info.get("folium", "green"), icon="medkit", prefix="fa")
                         ).add_to(vmap)
 
-                vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ff5a00 !important; stroke-width:3.5px !important; cursor:pointer;}</style>"))
+                vmap.get_root().html.add_child(folium.Element("<style>.leaflet-interactive:focus{outline:none;} path.leaflet-interactive:hover{stroke:#ffc107 !important; stroke-width:3.5px !important; cursor:pointer;}</style>"))
 
                 selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
 
@@ -1618,6 +1863,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = False
                         st.rerun()
 
+            # لوحة التحكم بجوار الخريطة
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
@@ -1673,6 +1919,7 @@ with tab2:
                     key="portal_action_mode_radio"
                 )
 
+                # 1. وضع تعديل الوقت والرسوم لمناطق حالية
                 if "تعديل" in action_mode or "Edit" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع حالياً لتعديلها.", "No zones assigned to this branch to edit."))
@@ -1719,6 +1966,7 @@ with tab2:
                             st.success(T(f"تم حفظ تعديل منطقة {selected_edit_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Saved {selected_edit_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
+                # 2. وضع إضافة منطقة لهذا الفرع
                 elif "إضافة" in action_mode or "Add" in action_mode:
                     if not available_to_add:
                         st.info(T("كافة المناطق المتاحة مضافة بالفعل لهذا الفرع.", "All zones are already added to this branch."))
@@ -1771,6 +2019,7 @@ with tab2:
                             st.success(T(f"تمت إضافة منطقة {selected_add_zone}، انزل لأسفل لتأكيد الإرسال للإدارة ⬇️", f"Added {selected_add_zone}! Scroll down to submit ⬇️"))
                             st.rerun()
 
+                # 3. وضع إزالة منطقة من هذا الفرع
                 elif "إزالة" in action_mode or "Remove" in action_mode:
                     if not active_zones_keys:
                         st.info(T("لا توجد مناطق مسجلة لهذا الفرع لإزالتها.", "No zones assigned to remove."))
@@ -1807,6 +2056,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
+            # جدول حصر التعديلات فقط مع حساب المسافة ووضع Edit وإرسال البريدين
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
@@ -1904,6 +2154,7 @@ with tab2:
                     )
 
                     if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
+                        mail_notifs = []
                         for v_id in diff_df["Vendor ID"].unique():
                             b_vname = diff_df[diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
                             branch_indices = diff_df[diff_df["Vendor ID"] == v_id].index
@@ -1927,20 +2178,36 @@ with tab2:
                             b_sub_df["Action"] = [sa[1] for sa in statuses_and_actions]
                             b_sub_df["Classification"] = "Vendor Zone Update"
 
-                            save_detailed_request(v_id, b_vname, b_sub_df)
+                            # 1. الحفظ في السجل المحلي وقاعدة البيانات
+                            saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
+                            
+                            # 2. إرسال الإيميلين بالإنجليزية (للأدمن وللفيندور مع الإكسيل)
+                            ok_mail, mail_msg = send_request_emails(
+                                vendor_id=v_id, 
+                                vendor_name=b_vname, 
+                                records_df=saved_records_df,
+                                submitted_by_email=current_user.get("email", "")
+                            )
+                            mail_notifs.append((b_vname, ok_mail, mail_msg))
 
-                        st.success(T("🎉 تم إرسال وتوثيق كافة التعديلات بنجاح! انتقل إلى تبويب Incoming Requests للاطلاع عليها.", "🎉 All modifications submitted successfully! Go to Incoming Requests tab."))
+                        st.session_state["submission_success_msg"] = T("🎉 تم توثيق واعتماد التعديلات بنجاح في قاعدة البيانات!", "🎉 Modifications saved successfully!")
+                        for vn, ok_m, m_msg in mail_notifs:
+                            if ok_m:
+                                st.session_state["submission_mail_info"] = f"📧 {m_msg}"
+                            else:
+                                st.session_state["submission_mail_info"] = f"ℹ️ {vn}: {m_msg}"
+
                         st.session_state["portal_show_diff"] = False
                         import copy
                         st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
                         st.rerun()
 
 # ==========================================
-# Tab 3: Incoming Requests
+# Tab 3: Incoming Requests (صفحة الطلبات المجمعة)
 # ==========================================
 if is_admin:
     with tab3:
-        st.header(T("📥 طلبات التسعير والتغطية الواردة من الفروع", "📥 Vendor Pricing & Coverage Requests"))
+        st.header(T("📥 طلبات التسعير والتغطية الواردة من الفروع", "📥 Pricing & Coverage Requests"), anchor="pricing-requests")
         init_requests_db()
         
         raw_df = get_all_requests_df()
@@ -1951,6 +2218,7 @@ if is_admin:
                 raw_df["Vendor ID"] = raw_df["Vendor ID"].astype(str)
                 raw_df["Action"] = raw_df.get("Action", "").astype(str)
 
+                # تحديث السجلات لحظياً لحساب المسافة واستبدال نشط بـ Edit للمناطق المعدلة
                 for idx, r in raw_df.iterrows():
                     v_id_val = str(r["Vendor ID"]).strip()
                     z_val = str(r.get("Zone", "")).strip()
@@ -1965,6 +2233,7 @@ if is_admin:
                         raw_df.at[idx, "Action"] = "Edit"
                         raw_df.at[idx, "Final_Status"] = "Edit"
 
+                # فلاتر التصفية
                 f_c1, f_c2 = st.columns([1.5, 1.5])
                 with f_c1:
                     all_vn = [T("كل الفروع", "All Vendors")] + sorted(raw_df["Vendor Name"].dropna().unique().tolist())
@@ -1974,93 +2243,94 @@ if is_admin:
                     all_vi = [T("كل الأكواد", "All IDs")] + sorted(subset_for_id["Vendor ID"].dropna().unique().tolist())
                     f_vid = st.selectbox(T("تصفية بكود الفرع:", "Filter by Vendor ID:"), all_vi, key="req_filter_id")
 
-                    filtered_req = raw_df.copy()
-                    if f_vname != T("كل الفروع", "All Vendors"):
-                        filtered_req = filtered_req[filtered_req["Vendor Name"] == f_vname]
-                    if f_vid != T("كل الأكواد", "All IDs"):
-                        filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
+                filtered_req = raw_df.copy()
+                if f_vname != T("كل الفروع", "All Vendors"):
+                    filtered_req = filtered_req[filtered_req["Vendor Name"] == f_vname]
+                if f_vid != T("كل الأكواد", "All IDs"):
+                    filtered_req = filtered_req[filtered_req["Vendor ID"] == f_vid]
 
-                    summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
-                        Total_Zones=("Zone", "count"),
-                        Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط|Edit", case=False)).sum()),
-                        Deact_Zones=("Action", lambda s: (s.str.contains("Deactivate|إلغاء", case=False)).sum()),
-                        Zones_Preview=("Zone", lambda s: ", ".join(s.head(3)) + ("..." if len(s) > 3 else ""))
-                    ).reset_index()
+                # تجميع الطلبات حسب كل إرسال (Vendor + Date)
+                summary_df = filtered_req.groupby(["Date", "Vendor ID", "Vendor Name"]).agg(
+                    Total_Zones=("Zone", "count"),
+                    Active_Zones=("Action", lambda s: (s.str.contains("Active|نشط|Edit", case=False)).sum()),
+                    Deact_Zones=("Action", lambda s: (s.str.contains("Deactivate|إلغاء", case=False)).sum()),
+                    Zones_Preview=("Zone", lambda s: ", ".join(s.head(3)) + ("..." if len(s) > 3 else ""))
+                ).reset_index()
 
-                    summary_df.rename(columns={
-                        "Date": T("تاريخ الإرسال", "Submission Date"),
-                        "Vendor ID": T("كود الفرع", "Vendor ID"),
-                        "Vendor Name": T("اسم الفرع", "Vendor Name"),
-                        "Total_Zones": T("إجمالي المناطق", "Total Zones"),
-                        "Active_Zones": T("المناطق النشطة والمعدلة", "Active & Edited Zones"),
-                        "Deact_Zones": T("المناطق الملغاة", "Deactivated Zones"),
-                        "Zones_Preview": T("معاينة المناطق", "Zones Overview (Preview)")
-                    }, inplace=True)
+                summary_df.rename(columns={
+                    "Date": T("تاريخ الإرسال", "Submission Date"),
+                    "Vendor ID": T("كود الفرع", "Vendor ID"),
+                    "Vendor Name": T("اسم الفرع", "Vendor Name"),
+                    "Total_Zones": T("إجمالي المناطق", "Total Zones"),
+                    "Active_Zones": T("المناطق النشطة والمعدلة", "Active & Edited Zones"),
+                    "Deact_Zones": T("المناطق الملغاة", "Deactivated Zones"),
+                    "Zones_Preview": T("معاينة المناطق", "Zones Overview (Preview)")
+                }, inplace=True)
 
-                    summary_df.insert(0, "Select", True)
+                summary_df.insert(0, "Select", True)
 
-                    st.write(T("📋 **حدد الطلبات المطلوبة من الجدول أدناه لتحميلها كملف أو استعراضها:**", "📋 **Select submissions from table below to download or view:**"))
+                st.write(T("📋 **حدد الطلبات المطلوبة من الجدول أدناه لتحميلها كملف أو استعراضها:**", "📋 **Select submissions from table below to download or view:**"))
 
-                    edited_summary = st.data_editor(
-                        summary_df,
-                        column_config={
-                            "Select": st.column_config.CheckboxColumn(T("تحديد", "Select"), default=True),
-                            T("تاريخ الإرسال", "Submission Date"): st.column_config.TextColumn(disabled=True),
-                            T("كود الفرع", "Vendor ID"): st.column_config.TextColumn(disabled=True),
-                            T("اسم الفرع", "Vendor Name"): st.column_config.TextColumn(disabled=True),
-                            T("إجمالي المناطق", "Total Zones"): st.column_config.NumberColumn(disabled=True),
-                            T("المناطق النشطة والمعدلة", "Active & Edited Zones"): st.column_config.NumberColumn(disabled=True),
-                            T("المناطق الملغاة", "Deactivated Zones"): st.column_config.NumberColumn(disabled=True),
-                            T("معاينة المناطق", "Zones Overview (Preview)"): st.column_config.TextColumn(disabled=True),
-                        },
-                        hide_index=True,
-                        use_container_width=True,
-                        key="requests_summary_editor"
-                    )
+                edited_summary = st.data_editor(
+                    summary_df,
+                    column_config={
+                        "Select": st.column_config.CheckboxColumn(T("تحديد", "Select"), default=True),
+                        T("تاريخ الإرسال", "Submission Date"): st.column_config.TextColumn(disabled=True),
+                        T("كود الفرع", "Vendor ID"): st.column_config.TextColumn(disabled=True),
+                        T("اسم الفرع", "Vendor Name"): st.column_config.TextColumn(disabled=True),
+                        T("إجمالي المناطق", "Total Zones"): st.column_config.NumberColumn(disabled=True),
+                        T("المناطق النشطة والمعدلة", "Active & Edited Zones"): st.column_config.NumberColumn(disabled=True),
+                        T("المناطق الملغاة", "Deactivated Zones"): st.column_config.NumberColumn(disabled=True),
+                        T("معاينة المناطق", "Zones Overview (Preview)"): st.column_config.TextColumn(disabled=True),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="requests_summary_editor"
+                )
 
-                    selected_rows = edited_summary[edited_summary["Select"] == True]
+                selected_rows = edited_summary[edited_summary["Select"] == True]
 
-                    col_d1, col_d2, col_d3 = st.columns([2, 1.5, 1])
+                col_d1, col_d2, col_d3 = st.columns([2, 1.5, 1])
 
-                    with col_d1:
-                        if not selected_rows.empty:
-                            sel_keys = set(zip(selected_rows[T("تاريخ الإرسال", "Submission Date")], selected_rows[T("كود الفرع", "Vendor ID")]))
-                            mask = [(d, str(v)) in sel_keys for d, v in zip(raw_df["Date"], raw_df["Vendor ID"])]
-                            download_df = raw_df[mask].copy()
+                with col_d1:
+                    if not selected_rows.empty:
+                        sel_keys = set(zip(selected_rows[T("تاريخ الإرسال", "Submission Date")], selected_rows[T("كود الفرع", "Vendor ID")]))
+                        mask = [(d, str(v)) in sel_keys for d, v in zip(raw_df["Date"], raw_df["Vendor ID"])]
+                        download_df = raw_df[mask].copy()
 
-                            if len(selected_rows) == 1:
-                                vname_clean = re.sub(r'[^\w\s-]', '', str(selected_rows.iloc[0][T("اسم الفرع", "Vendor Name")]).strip()).replace(" ", "_")
-                                filename = f"Pricing_Request_{vname_clean}.csv"
-                            else:
-                                filename = f"Combined_Pricing_Requests_{len(selected_rows)}_Vendors.csv"
-
-                            csv_bytes = download_df.to_csv(index=False).encode('utf-8-sig')
-                            st.download_button(
-                                T(f"📥 تحميل ملف CSV مفصل ({len(download_df)} منطقة)", f"📥 Download Detailed CSV ({len(download_df)} zones)"),
-                                data=csv_bytes,
-                                file_name=filename,
-                                mime="text/csv",
-                                type="primary",
-                                use_container_width=True
-                            )
+                        if len(selected_rows) == 1:
+                            vname_clean = re.sub(r'[^\w\s-]', '', str(selected_rows.iloc[0][T("اسم الفرع", "Vendor Name")]).strip()).replace(" ", "_")
+                            filename = f"Pricing_Request_{vname_clean}.csv"
                         else:
-                            st.warning(T("يرجى تحديد طلب واحد على الأقل للتحميل.", "Please select at least one request to download."))
+                            filename = f"Combined_Pricing_Requests_{len(selected_rows)}_Vendors.csv"
 
-                    with col_d2:
-                        show_details = st.checkbox(T("👁️ استعراض تفاصيل المناطق المسجلة", "👁️ View Detailed Zones Table"), value=True)
+                        csv_bytes = download_df.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            T(f"📥 تحميل ملف CSV مفصل ({len(download_df)} منطقة)", f"📥 Download Detailed CSV ({len(download_df)} zones)"),
+                            data=csv_bytes,
+                            file_name=filename,
+                            mime="text/csv",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning(T("يرجى تحديد طلب واحد على الأقل للتحميل.", "Please select at least one request to download."))
 
-                    with col_d3:
-                        if st.button(T("🗑️ مسح السجلات", "🗑️ Clear Records"), type="secondary", use_container_width=True):
-                            st.session_state["session_requests_list"] = []
-                            if os.path.exists(REQUESTS_FILE):
-                                os.remove(REQUESTS_FILE)
-                            init_requests_db()
-                            st.rerun()
+                with col_d2:
+                    show_details = st.checkbox(T("👁️ استعراض تفاصيل المناطق المسجلة", "👁️ View Detailed Zones Table"), value=True)
 
-                    if show_details and not selected_rows.empty:
-                        st.markdown("---")
-                        st.subheader(T("🔍 جدول تفاصيل المناطق للطلبات المحددة", "🔍 Detailed Zones for Selected Requests"))
-                        st.dataframe(download_df, hide_index=True, use_container_width=True)
+                with col_d3:
+                    if st.button(T("🗑️ مسح السجلات", "🗑️ Clear Records"), type="secondary", use_container_width=True):
+                        st.session_state["session_requests_list"] = []
+                        if os.path.exists(REQUESTS_FILE):
+                            os.remove(REQUESTS_FILE)
+                        init_requests_db()
+                        st.rerun()
+
+                if show_details and not selected_rows.empty:
+                    st.markdown("---")
+                    st.subheader(T("🔍 جدول تفاصيل المناطق للطلبات المحددة", "🔍 Detailed Zones for Selected Requests"))
+                    st.dataframe(download_df, hide_index=True, use_container_width=True)
             except Exception as e:
                 st.error(f"حدث خطأ أثناء قراءة الطلبات: {e}")
 
