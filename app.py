@@ -10,6 +10,7 @@ import numpy as np
 import re
 import os
 import io
+import copy
 import requests
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -199,7 +200,7 @@ BRANCH_PALETTE = [
 ]
 
 # ==========================================
-# 2. إدارة المستخدمين وقاعدة البيانات وإعدادات البريد
+# 2. إدارة المستخدمين وإعدادات البريد
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
@@ -300,7 +301,7 @@ def delete_user(email, current_user_dict=None):
     return True, T("تم حذف الحساب بنجاح!", "User deleted successfully!")
 
 # ==========================================
-# 3. دوال المعالجة المتقدمة للـ WKT والمسافات
+# 3. دوال المعالجة المتقدمة للـ WKT والمطابقة الذكية
 # ==========================================
 def normalize_id(val):
     if pd.isna(val): return ""
@@ -333,6 +334,13 @@ def clean_wkt(polygon_str):
     s = re.sub(r'\s+', ' ', s)
     return s
 
+def normalize_zone_key(name):
+    if not name: return ""
+    s = str(name).strip().lower()
+    s = re.sub(r'^(al[\s\-_]+|el[\s\-_]+|ال)', '', s)
+    s = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF]', '', s)
+    return s
+
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0 
     dlat = np.radians(lat2 - lat1)
@@ -354,6 +362,11 @@ def calc_vendor_zone_distance(vid, zone_name, df_v, gdf_a):
         
     z_clean = str(zone_name).strip().lower()
     z_match = gdf_a[gdf_a["Delivery Location Area Name"].astype(str).str.strip().str.lower() == z_clean]
+    if z_match.empty:
+        z_norm = normalize_zone_key(zone_name)
+        if "norm_key" in gdf_a.columns:
+            z_match = gdf_a[gdf_a["norm_key"] == z_norm]
+            
     if z_match.empty:
         return "-"
         
@@ -516,9 +529,9 @@ def load_data():
         df_p["fault_cr"] = df_p[col_fault_cr] if col_fault_cr else "-"
 
     if not df_d.empty and not df_v.empty:
-        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
-        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
-        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
+        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id", "Vendor Attributes Vendor Id", "Vendor Code", "Store ID", "Branch ID"])
+        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id", "Chain Attributes Chain ID"])
+        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone", "Zone Name"])
         d_time_col = robust_get_col(df_d, ["Delivery Time", "Time", "Duration"])
         d_fee_col = robust_get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
 
@@ -528,7 +541,7 @@ def load_data():
         df_d["clean_time"] = df_d[d_time_col].astype(str).str.strip() if d_time_col else ""
         df_d["clean_fee"] = df_d[d_fee_col].astype(str).str.strip() if d_fee_col else ""
 
-        # استبعاد منطقة Egypt Charities نهائياً من شيت التوصيل
+        # استبعاد منطقة Egypt Charities نهائياً
         mask_charity = df_d["clean_zone"].str.contains(r"charit|charities", case=False, na=False)
         df_d = df_d[~mask_charity].copy()
 
@@ -546,7 +559,8 @@ def load_data():
             for idx, wkt_str in df_a["cleaned_wkt"].items():
                 if pd.notnull(wkt_str):
                     try:
-                        geometries.append(wkt.loads(wkt_str))
+                        geom = wkt.loads(wkt_str)
+                        geometries.append(geom)
                         valid_indices.append(idx)
                     except Exception: pass
                         
@@ -556,7 +570,6 @@ def load_data():
                 area_name_col = robust_get_col(gdf_a, ["Delivery Location Area Name", "Area Name", "Name", "Zone", "Area", "Zone Name"])
                 if area_name_col:
                     gdf_a["Delivery Location Area Name"] = gdf_a[area_name_col].astype(str).str.strip()
-                    # استبعاد ماكدونالدز التجريبية واستبعاد منطقة Egypt Charities نهائياً
                     mask_exclude = gdf_a["Delivery Location Area Name"].str.contains(r"mcd|mcdonald|charit|charities", case=False, na=False)
                     gdf_a = gdf_a[~mask_exclude].copy()
                     
@@ -564,6 +577,7 @@ def load_data():
                 centroids = gdf_a.geometry.centroid
                 gdf_a["centroid_lat"] = centroids.y
                 gdf_a["centroid_lng"] = centroids.x
+                gdf_a["norm_key"] = gdf_a["Delivery Location Area Name"].apply(normalize_zone_key)
                 gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0008, preserve_topology=True)
             else: gdf_a = gpd.GeoDataFrame()
         else: gdf_a = gpd.GeoDataFrame()
@@ -753,7 +767,7 @@ def send_request_emails(vendor_id, vendor_name, records_df,
 
         recipients_status = []
 
-        # 1. إيميل الأدمن الرئيسي
+        # 1. إيميل الأدمن الرئيسي (محمود علاء)
         admin_subject = f"🔔 [Action Required] Pricing & Coverage Request - {vendor_name} (ID: {vendor_id})"
         admin_html = f"""
         <!DOCTYPE html>
@@ -831,7 +845,7 @@ def send_request_emails(vendor_id, vendor_name, records_df,
         server.sendmail(sender_email, [admin_recipient], msg_admin.as_string())
         recipients_status.append(admin_recipient)
 
-        # 2. إيميل الفيندور مع الإكسيل
+        # 2. إيميل تأكيد الفيندور مع الإكسيل
         if submitted_by_email and submitted_by_email.strip() and "@" in submitted_by_email:
             vendor_subject = f"✅ Request Received: Pricing & Coverage Update - {vendor_name} (ID: {vendor_id})"
             vendor_html = f"""
@@ -1239,7 +1253,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي mahmoud.alaa.2@talabat.com
+# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1257,7 +1271,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (عرض كامل المضلعات بدون حذف)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1577,7 +1591,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (مع حل مشكلة جلب مناطق التغطية بدقة)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1665,31 +1679,55 @@ with tab2:
                 z for z in gdf_areas["Delivery Location Area Name"].dropna().unique() 
                 if not re.search(r"charit|charities", str(z), re.IGNORECASE)
             ]) if not gdf_areas.empty else []
-            zlk = {z.strip().lower(): z for z in all_known_zones}
+            
+            # قواميس المطابقة الذكية للمناطق
+            zlk_exact = {z.strip().lower(): z for z in all_known_zones}
+            zlk_norm = {normalize_zone_key(z): z for z in all_known_zones}
 
+            def resolve_zone_name(raw_name):
+                if not raw_name: return ""
+                raw_str = str(raw_name).strip()
+                low = raw_str.lower()
+                if low in zlk_exact: return zlk_exact[low]
+                norm = normalize_zone_key(raw_str)
+                if norm in zlk_norm: return zlk_norm[norm]
+                for k, v in zlk_exact.items():
+                    if k in low or low in k: return v
+                for k, v in zlk_norm.items():
+                    if k in norm or norm in k: return v
+                return raw_str
+
+            # تهيئة مناطق التغطية الحالية للفرع/السلسلة بحل البحث المزدوج
             if st.session_state.get("portal_session_id") != portal_session_key:
                 st.session_state["portal_session_id"] = portal_session_key
                 original_alloc = {str(b_vid): {} for b_vid in branch_names.keys()}
                 
                 vids_in_scope = set(branch_names.keys())
-                if not df_delivery.empty and "clean_vid" in df_delivery.columns:
-                    m_del = df_delivery[df_delivery["clean_vid"].isin(vids_in_scope)]
+                if not df_delivery.empty:
+                    # 1. البحث بكود الفرع أو بكود السلسلة في حال كان الفرع يتبع نفس السلسلة
+                    mask_vid = df_delivery["clean_vid"].isin(vids_in_scope)
+                    mask_cid = (df_delivery["clean_cid"] == str(found_cid)) & ((df_delivery["clean_vid"] == "") | (~df_delivery["clean_vid"].isin(df_vendors["clean_vid"].unique())))
+                    m_del = df_delivery[mask_vid | mask_cid].copy()
+
                     for _, r in m_del.iterrows():
-                        v_id = str(r.get("clean_vid", ""))
-                        zn = zlk.get(str(r.get("clean_zone", "")).strip().lower())
-                        if zn and v_id in original_alloc:
+                        row_vid = str(r.get("clean_vid", "")).strip()
+                        target_vid = row_vid if row_vid in vids_in_scope else list(vids_in_scope)[0]
+                        
+                        raw_z = str(r.get("clean_zone", "")).strip()
+                        zn = resolve_zone_name(raw_z)
+                        
+                        if zn and target_vid in original_alloc:
                             fee_val = 0.0
                             raw_fee = str(r.get("clean_fee", "")).strip()
                             try: fee_val = float(raw_fee)
                             except: fee_val = 0.0
                             raw_t = str(r.get("clean_time", "45 mins")).strip()
                             final_t = raw_t if (raw_t and raw_t.lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
-                            original_alloc[v_id][zn] = {
+                            original_alloc[target_vid][zn] = {
                                 "time": final_t,
                                 "fee": fee_val
                             }
                 
-                import copy
                 st.session_state["portal_orig_alloc"] = copy.deepcopy(original_alloc)
                 st.session_state["portal_working_alloc"] = copy.deepcopy(original_alloc)
                 st.session_state["portal_active_vid"] = list(branch_names.keys())[0] if branch_names else ""
@@ -1727,14 +1765,15 @@ with tab2:
                             unsafe_allow_html=True
                         )
 
-            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 20, key="portal_radius_slider")
+            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
 
             all_chain_covered_zones = set()
             for v_id, z_dict in working_alloc.items():
                 for z in z_dict:
                     all_chain_covered_zones.add(z.strip().lower())
+                    all_chain_covered_zones.add(normalize_zone_key(z))
 
-            covered_mask = gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(all_chain_covered_zones) if not gdf_areas.empty else pd.Series(dtype=bool)
+            covered_mask = (gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(all_chain_covered_zones)) | (gdf_areas["norm_key"].isin(all_chain_covered_zones)) if not gdf_areas.empty else pd.Series(dtype=bool)
             covered_gdf = gdf_areas[covered_mask].copy() if not gdf_areas.empty else gpd.GeoDataFrame()
 
             if has_loc and not gdf_areas.empty:
@@ -1756,11 +1795,13 @@ with tab2:
             for v_id, z_dict in working_alloc.items():
                 for z in z_dict:
                     zone_to_branch_owner[z.strip().lower()] = v_id
+                    zone_to_branch_owner[normalize_zone_key(z)] = v_id
 
             cm, cf = st.columns([6, 4])
 
+            # الخريطة والتحريك والتحديد
             with cm:
-                st.subheader(f"🗺️ Map ({len(all_chain_covered_zones)} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
+                st.subheader(f"🗺️ Map ({len([z for v in working_alloc.values() for z in v])} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
 
                 active_row = vd[vd["clean_vid"] == active_vid]
@@ -1803,11 +1844,13 @@ with tab2:
 
                 if not pa.empty:
                     def get_portal_zone_styling(feature):
-                        z_name_norm = str(feature["properties"].get("Delivery Location Area Name", "")).strip().lower()
-                        is_clicked_target = (z_name_norm == selected_zone_in_state and z_name_norm != "")
+                        z_name = str(feature["properties"].get("Delivery Location Area Name", "")).strip()
+                        z_low = z_name.lower()
+                        z_norm = normalize_zone_key(z_name)
+                        is_clicked_target = (z_low == selected_zone_in_state or z_norm == selected_zone_in_state) and selected_zone_in_state != ""
                         
-                        if z_name_norm in zone_to_branch_owner:
-                            owner_vid = zone_to_branch_owner[z_name_norm]
+                        owner_vid = zone_to_branch_owner.get(z_low) or zone_to_branch_owner.get(z_norm)
+                        if owner_vid:
                             b_hex = branch_color_map.get(owner_vid, {}).get("hex", "#28a745")
                             is_active_owner = (owner_vid == active_vid)
                             
@@ -1850,6 +1893,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = False
                         st.rerun()
 
+            # لوحة التحكم بجوار الخريطة
             with cf:
                 st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
                 
@@ -1965,7 +2009,7 @@ with tab2:
                         )
                         st.session_state["portal_selected_zone"] = selected_add_zone
 
-                        other_owner_vid = zone_to_branch_owner.get(selected_add_zone.strip().lower())
+                        other_owner_vid = zone_to_branch_owner.get(selected_add_zone.strip().lower()) or zone_to_branch_owner.get(normalize_zone_key(selected_add_zone))
                         if other_owner_vid and other_owner_vid != active_vid:
                             other_b_name = branch_names.get(other_owner_vid, other_owner_vid)
                             st.warning(T(
@@ -2039,13 +2083,13 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول حصر التعديلات فقط
+            # جدول مراجعة المناطق المعدلة مع إمكانية حذف واستبعاد أي تعديل بالكامل
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
                 st.caption(T(
-                    "يعرض هذا الجدول حصرياً المناطق التي طرأ عليها تعديل مع حساب المسافة ونوع الإجراء:",
-                    "This table shows exclusively the modified zones along with calculated distance and action:"
+                    "يعرض هذا الجدول حصرياً المناطق التي طرأ عليها تعديل مع حساب المسافة ونوع الإجراء. يمكنك تحديد أي منطقة لاستبعادها أو التراجع عن تعديلها تماماً:",
+                    "This table shows exclusively modified zones with distances. You can discard or revert any zone below:"
                 ))
 
                 diff_rows = []
@@ -2060,6 +2104,7 @@ with tab2:
                         if z not in w_zones:
                             dist_calc = calc_vendor_zone_distance(v_id, z, df_vendors, gdf_areas)
                             diff_rows.append({
+                                "Discard": False,
                                 "Vendor ID": v_id,
                                 "Branch Name": branch_names.get(v_id, v_id),
                                 "Assigned Branch": b_lbl,
@@ -2077,6 +2122,7 @@ with tab2:
                         dist_calc = calc_vendor_zone_distance(v_id, z, df_vendors, gdf_areas)
                         if z not in o_zones:
                             diff_rows.append({
+                                "Discard": False,
                                 "Vendor ID": v_id,
                                 "Branch Name": branch_names.get(v_id, v_id),
                                 "Assigned Branch": b_lbl,
@@ -2094,6 +2140,7 @@ with tab2:
                             f_chg = float(o_item.get("fee", 0.0) or 0.0) != float(w_item.get("fee", 0.0) or 0.0)
                             if t_chg or f_chg:
                                 diff_rows.append({
+                                    "Discard": False,
                                     "Vendor ID": v_id,
                                     "Branch Name": branch_names.get(v_id, v_id),
                                     "Assigned Branch": b_lbl,
@@ -2112,6 +2159,11 @@ with tab2:
                     diff_df = pd.DataFrame(diff_rows)
 
                     column_configs = {
+                        "Discard": st.column_config.CheckboxColumn(
+                            T("🗑️ استبعاد", "🗑️ Discard"),
+                            default=False,
+                            help=T("حدد هذا المربع بجانب أي منطقة تريد إلغاء تعديلها وحذفها تماماً من الجدول", "Check to discard this change")
+                        ),
                         "Assigned Branch": st.column_config.TextColumn(T("الفرع المسؤول", "Assigned Branch"), disabled=True),
                         "Zone": st.column_config.TextColumn(T("اسم المنطقة", "Zone Name"), disabled=True),
                         "Distance (km)": st.column_config.TextColumn(T("المسافة (كم)", "Distance (km)"), disabled=True),
@@ -2136,52 +2188,92 @@ with tab2:
                         key="portal_diff_editor"
                     )
 
-                    if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
-                        mail_notifs = []
-                        for v_id in diff_df["Vendor ID"].unique():
-                            b_vname = diff_df[diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
-                            branch_indices = diff_df[diff_df["Vendor ID"] == v_id].index
-                            b_sub_df = edited_diff.loc[branch_indices].copy()
+                    # أزرار الإجراءات: الاعتماد أو استبعاد مناطق محددة أو التراجع عن الكل
+                    c_act1, c_act2, c_act3 = st.columns([1.6, 1.4, 1.0])
 
-                            def determine_final_status_and_action(r):
-                                act = str(r.get("Action", "")).strip()
-                                stat = str(r.get("Status", "")).strip()
-                                chg = str(r.get("Change Type", "")).strip()
-                                if "Deactivate" in act or "إلغاء" in act:
-                                    return "Deactivated", "إلغاء التفعيل"
-                                elif "جديدة" in stat or "New" in stat or "إضافة" in chg:
-                                    return "Active (New)", "نشط"
-                                elif "edit" in act.lower() or "تعديل" in act.lower() or "تحديث" in stat.lower() or "تعديل" in chg.lower():
-                                    return "Edit", "Edit"
-                                else:
-                                    return "Active (Existing)", act
+                    with c_act1:
+                        if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
+                            mail_notifs = []
+                            # تصفية المناطق غير المستبعدة فقط
+                            valid_indices = [idx_r for idx_r, r in edited_diff.iterrows() if not r.get("Discard", False)]
+                            filtered_diff_df = diff_df.loc[valid_indices].copy()
 
-                            statuses_and_actions = b_sub_df.apply(determine_final_status_and_action, axis=1)
-                            b_sub_df["Final_Status"] = [sa[0] for sa in statuses_and_actions]
-                            b_sub_df["Action"] = [sa[1] for sa in statuses_and_actions]
-                            b_sub_df["Classification"] = "Vendor Zone Update"
-
-                            saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
-                            
-                            ok_mail, mail_msg = send_request_emails(
-                                vendor_id=v_id, 
-                                vendor_name=b_vname, 
-                                records_df=saved_records_df,
-                                submitted_by_email=current_user.get("email", "")
-                            )
-                            mail_notifs.append((b_vname, ok_mail, mail_msg))
-
-                        st.session_state["submission_success_msg"] = T("🎉 تم توثيق واعتماد التعديلات بنجاح في قاعدة البيانات!", "🎉 Modifications saved successfully!")
-                        for vn, ok_m, m_msg in mail_notifs:
-                            if ok_m:
-                                st.session_state["submission_mail_info"] = f"📧 {m_msg}"
+                            if filtered_diff_df.empty:
+                                st.warning(T("كافة المناطق مستبعدة، لا توجد تعديلات لإرسالها.", "All zones were marked for discard."))
                             else:
-                                st.session_state["submission_mail_info"] = f"ℹ️ {vn}: {m_msg}"
+                                for v_id in filtered_diff_df["Vendor ID"].unique():
+                                    b_vname = filtered_diff_df[filtered_diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
+                                    branch_indices = filtered_diff_df[filtered_diff_df["Vendor ID"] == v_id].index
+                                    b_sub_df = edited_diff.loc[branch_indices].copy()
 
-                        st.session_state["portal_show_diff"] = False
-                        import copy
-                        st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
-                        st.rerun()
+                                    def determine_final_status_and_action(r):
+                                        act = str(r.get("Action", "")).strip()
+                                        stat = str(r.get("Status", "")).strip()
+                                        chg = str(r.get("Change Type", "")).strip()
+                                        if "Deactivate" in act or "إلغاء" in act:
+                                            return "Deactivated", "إلغاء التفعيل"
+                                        elif "جديدة" in stat or "New" in stat or "إضافة" in chg:
+                                            return "Active (New)", "نشط"
+                                        elif "edit" in act.lower() or "تعديل" in act.lower() or "تحديث" in stat.lower() or "تعديل" in chg.lower():
+                                            return "Edit", "Edit"
+                                        else:
+                                            return "Active (Existing)", act
+
+                                    statuses_and_actions = b_sub_df.apply(determine_final_status_and_action, axis=1)
+                                    b_sub_df["Final_Status"] = [sa[0] for sa in statuses_and_actions]
+                                    b_sub_df["Action"] = [sa[1] for sa in statuses_and_actions]
+                                    b_sub_df["Classification"] = "Vendor Zone Update"
+
+                                    saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
+                                    
+                                    ok_mail, mail_msg = send_request_emails(
+                                        vendor_id=v_id, 
+                                        vendor_name=b_vname, 
+                                        records_df=saved_records_df,
+                                        submitted_by_email=current_user.get("email", "")
+                                    )
+                                    mail_notifs.append((b_vname, ok_mail, mail_msg))
+
+                                st.session_state["submission_success_msg"] = T("🎉 تم توثيق واعتماد التعديلات بنجاح في قاعدة البيانات!", "🎉 Modifications saved successfully!")
+                                for vn, ok_m, m_msg in mail_notifs:
+                                    if ok_m:
+                                        st.session_state["submission_mail_info"] = f"📧 {m_msg}"
+                                    else:
+                                        st.session_state["submission_mail_info"] = f"ℹ️ {vn}: {m_msg}"
+
+                                st.session_state["portal_show_diff"] = False
+                                st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
+                                st.rerun()
+
+                    with c_act2:
+                        # زر حذف واستبعاد المناطق المحددة بالصح
+                        if st.button(T("🗑️ حذف المناطق المحددة بالصح", "🗑️ Discard Selected Zones"), type="secondary", use_container_width=True):
+                            discarded_count = 0
+                            for idx_row, r_edit in edited_diff.iterrows():
+                                if r_edit.get("Discard", False):
+                                    row_vid = diff_df.loc[idx_row, "Vendor ID"]
+                                    row_zone = diff_df.loc[idx_row, "Zone"]
+                                    # إذا كانت مسجلة أصلاً -> نعيدها لحالتها الأصلية
+                                    if row_vid in orig_alloc and row_zone in orig_alloc[row_vid]:
+                                        working_alloc[row_vid][row_zone] = copy.deepcopy(orig_alloc[row_vid][row_zone])
+                                    else:
+                                        # إذا كانت مضافة حديثاً -> نحذفها تماماً من الـ working_alloc
+                                        if row_vid in working_alloc and row_zone in working_alloc[row_vid]:
+                                            del working_alloc[row_vid][row_zone]
+                                    discarded_count += 1
+                            if discarded_count > 0:
+                                st.session_state["portal_working_alloc"] = working_alloc
+                                st.success(T(f"✅ تم حذف {discarded_count} منطقة وإلغاء تعديلها بنجاح!", f"✅ Discarded {discarded_count} zones successfully!"))
+                                st.rerun()
+                            else:
+                                st.warning(T("يرجى تحديد خانة '🗑️ استبعاد' بجانب المنطقة المراد حذفها من الجدول أولاً.", "Please check 'Discard' column first."))
+
+                    with c_act3:
+                        # زر التراجع عن كل التعديلات دفعة واحدة
+                        if st.button(T("🔄 تراجع عن الكل", "🔄 Revert All"), use_container_width=True):
+                            st.session_state["portal_working_alloc"] = copy.deepcopy(orig_alloc)
+                            st.session_state["portal_show_diff"] = False
+                            st.rerun()
 
 # ==========================================
 # Tab 3: Incoming Requests
@@ -2316,15 +2408,13 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع. (عند إرسال أي تعديل من Vendor Portal سيظهر هنا فوراً)", "📭 No incoming requests found. Submit modifications in Vendor Portal to view them here."))
 
 # ==========================================
-# Tab 4: Users Management (محدث بالكامل لفرز السلاسل والفروع بدقة وتفاعل لحظي)
+# Tab 4: Users Management
 # ==========================================
 if is_master_admin:
     with tab4:
         st.header(T("👥 إدارة المستخدمين والصلاحيات (الأدمن الرئيسي)", "👥 User Management & Permissions (Master Admin Only)"))
         st.caption(T(f"🔒 صلاحية الوصول لهذه الشاشة محصورة ببريد: `{MASTER_ADMIN_EMAIL}`", f"🔒 Access strictly restricted to: `{MASTER_ADMIN_EMAIL}`"))
         
-        # تجهيز قوائم السلاسل والفروع بفرز واحترافية كاملة
-        # 1. قائمة السلاسل الفريدة مع عدد الفروع
         valid_chains_data = df_vendors[df_vendors["clean_cid"] != ""].copy()
         chain_opts_map = {}
         if not valid_chains_data.empty:
@@ -2334,7 +2424,6 @@ if is_master_admin:
                 branch_count = len(c_group)
                 chain_opts_map[str(cid_val)] = f"🏢 {c_display_name} (ID: {cid_val} - {branch_count} {T('فروع', 'branches')})"
 
-        # 2. قائمة الفروع الفردية مع اسم السلسلة التابع لها
         valid_vendors_data = df_vendors[df_vendors["clean_vid"] != ""].copy()
         vendor_opts_map = {}
         if not valid_vendors_data.empty:
@@ -2351,9 +2440,6 @@ if is_master_admin:
             T("📋 قائمة المستخدمين", "📋 Users List")
         ])
         
-        # -------------------------------------------------------------
-        # ➕ إضافة مستخدم جديد
-        # -------------------------------------------------------------
         with tab_u1:
             st.markdown(f"#### {T('بيانات الحساب الجديد', 'New Account Details')}")
             col_u1, col_u2 = st.columns(2)
@@ -2366,10 +2452,9 @@ if is_master_admin:
                 )
                 new_email = st.text_input(T("البريد الإلكتروني:", "Email:"), key="add_user_email_input").strip().lower()
             with col_u2:
-                new_password = st.text_input(T("كلمة المرور:", "Password:"), type="password", key="add_user_password_input").strip()
+                new_password = st.text_input(T("كلمة المرور:", "Password:")), type="password", key="add_user_password_input").strip()
 
             st.markdown("---")
-            # زر اختيار النطاق خارج الفورم ليعمل التبديل فورياً بين Chains و Vendors
             access_choice = st.radio(
                 T("اختر نطاق الربط والفروع التابعة:", "Assigned Scope:"),
                 [
@@ -2385,7 +2470,7 @@ if is_master_admin:
 
             if "Chain" in access_choice or "سلاسل" in access_choice:
                 access_type = "Chain ID"
-                st.info(T("🏢 حدد السلسلة أو السلاسل المطلوبة (سيتم إعطاء المستخدم حق الوصول لكافة فروع السلسلة تلقائياً):", "🏢 Select chain(s) - user will have access to all chain branches:"))
+                st.info(T("🏢 حدد السلسلة أو السلاسل المطلوبة:", "🏢 Select chain(s):"))
                 chosen_chains = st.multiselect(
                     T("اختر من قائمة السلاسل (Chains List):", "Select from Chains:"),
                     options=list(chain_opts_map.keys()),
@@ -2407,7 +2492,6 @@ if is_master_admin:
             else:
                 access_type = "all"
                 selected_access_ids_str = "all"
-                st.warning(T("⚠️ تنبيه: اختيار 'كل فروع القسم' يمنح المستخدم إمكانية إدارة ورؤية كافة فروع وسلاسل المنصة.", "⚠️ Warning: Master Access allows viewing all branches."))
 
             st.write("")
             if st.button(T("💾 إنشاء الحساب الآن", "💾 Create User Now"), type="primary", use_container_width=True, key="btn_create_user_submit"):
@@ -2423,9 +2507,6 @@ if is_master_admin:
                     else:
                         st.error(msg)
 
-        # -------------------------------------------------------------
-        # ✏️ تعديل صلاحيات وكلمة مرور مستخدم مسجل
-        # -------------------------------------------------------------
         with tab_u2:
             st.subheader(T("تعديل صلاحيات ومحفظة فروع وكلمة مرور مستخدم مسجل", "Edit User Permissions, Portfolio & Password"))
             users_list_df = get_users_df()
@@ -2517,9 +2598,6 @@ if is_master_admin:
                 else:
                     st.error(msg)
 
-        # -------------------------------------------------------------
-        # 📋 قائمة المستخدمين
-        # -------------------------------------------------------------
         with tab_u3:
             users_list_df = get_users_df()
             display_users_df = users_list_df.copy()
