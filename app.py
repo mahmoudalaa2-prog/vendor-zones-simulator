@@ -82,19 +82,19 @@ def T(ar_text, en_text):
 BRANCH_PALETTE = [
     {"hex": "#28a745", "folium": "green", "name": "أخضر"},
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
-    {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
+    {"hex": "#9b59b6", "purple": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
-    {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
-    {"hex": "#8540f5", "folium": "darkpurple", "name": "أرجواني"},
-    {"hex": "#a52a2a", "folium": "darkred", "name": "بني"},
-    {"hex": "#ffc107", "folium": "orange", "name": "أصفر ذهبي"},
-    {"hex": "#20c997", "folium": "cadetblue", "name": "تيل"},
-    {"hex": "#6610f2", "folium": "darkpurple", "name": "نيلي"},
-    {"hex": "#fd7e14", "folium": "orange", "name": "برتقالي فاقع"},
-    {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
+    {"hex": "#198754", "darkgreen": "darkgreen", "name": "أخضر داكن"},
+    {"hex": "#8540f5", "darkpurple": "darkpurple", "name": "أرجواني"},
+    {"hex": "#a52a2a", "darkred": "darkred", "name": "بني"},
+    {"hex": "#ffc107", "orange": "orange", "name": "أصفر ذهبي"},
+    {"hex": "#20c997", "cadetblue": "cadetblue", "name": "تيل"},
+    {"hex": "#6610f2", "darkpurple": "darkpurple", "name": "نيلي"},
+    {"hex": "#fd7e14", "orange": "orange", "name": "برتقالي فاقع"},
+    {"hex": "#007bff", "blue": "blue", "name": "أزرق"}
 ]
 
 DELIVERY_TIME_CHOICES = ["20 mins", "25 mins", "30 mins", "35 mins", "40 mins", "45 mins", "50 mins", "55 mins", "60 mins"]
@@ -107,6 +107,7 @@ REQUESTS_FILE = "vendor_pricing_requests.csv"
 SMTP_CONFIG_FILE = "smtp_config.json"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
+# الرابط السحابي الدائم المربوط بـ Google Sheet لقاعدة البيانات الحية
 CLOUD_DB_URL = "https://script.google.com/macros/s/AKfycbxeqazFLMccOtIG6hNrupdWNES8yneeD20kbiwAR7K2t4EXNwpRDu85twE3ewjlFVspXQ/exec"
 
 REQUESTS_COLUMNS = [
@@ -118,7 +119,10 @@ def cloud_post(payload):
     if not CLOUD_DB_URL:
         return False, "رابط قاعدة البيانات السحابية غير معرف"
     try:
-        res = requests.post(CLOUD_DB_URL, json=payload, timeout=25)
+        res = requests.post(CLOUD_DB_URL, json=payload, timeout=25, allow_redirects=True)
+        if "ServiceLogin" in res.url or "accounts.google.com" in res.url:
+            return False, "جوجل يرفض الاتصال ويطلب تسجيل الدخول. يرجى ضبط Who has access على Anyone"
+            
         if res.status_code in [200, 302]:
             return True, "تم الحفظ سحابياً بنجاح"
         return False, f"استجاب سيرفر جوجل بكود: {res.status_code}"
@@ -300,7 +304,7 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
     if ok_cloud:
         return True, T("تم إنشاء الحساب وحفظه في Google Sheets سحابياً بنجاح!", "User created and synced to Google Sheets!")
     else:
-        return True, T(f"تم إنشاء الحساب محلياً، مع تنبيه المزامنة: {msg_cloud}", f"Created locally: {msg_cloud}")
+        return False, T(f"تم إنشاء الحساب محلياً ولكن فشل الحفظ السحابي: {msg_cloud}", f"Created locally but cloud sync failed: {msg_cloud}")
 
 def update_user_permissions(email, role, access_type, access_ids, new_password=None, current_user_dict=None):
     if not check_is_master_admin(current_user_dict):
@@ -329,12 +333,16 @@ def update_user_permissions(email, role, access_type, access_ids, new_password=N
             "access_ids": final_acc_ids,
             "password": final_pwd
         }
-        cloud_post(cloud_payload)
+        ok_cloud, msg_cloud = cloud_post(cloud_payload)
 
         try:
             df.to_csv(USERS_FILE, index=False)
         except Exception: pass
-        return True, T("تم تحديث البيانات وكلمة المرور ومزامنتها سحابياً!", "User updated and synced to cloud!"), df.iloc[idx[0]].to_dict()
+        
+        if ok_cloud:
+            return True, T("تم تحديث البيانات وكلمة المرور ومزامنتها سحابياً!", "User updated and synced to cloud!"), df.iloc[idx[0]].to_dict()
+        else:
+            return False, T(f"خطأ سحابي: {msg_cloud}", f"Cloud Error: {msg_cloud}"), None
     return False, T("المستخدم غير موجود.", "User not found."), None
 
 def delete_user(email, current_user_dict=None):
@@ -346,13 +354,17 @@ def delete_user(email, current_user_dict=None):
         return False, T("لا يمكن حذف الأدمن الرئيسي!", "Cannot delete master admin!")
         
     email_clean = email.strip().lower()
-    cloud_post({"action": "delete_user", "email": email_clean})
+    ok_cloud, msg_cloud = cloud_post({"action": "delete_user", "email": email_clean})
     
     df = df[df["email"].str.lower() != email_clean]
     try:
         df.to_csv(USERS_FILE, index=False)
     except Exception: pass
-    return True, T("تم حذف الحساب من السحابة بنجاح!", "User deleted from cloud successfully!")
+    
+    if ok_cloud:
+        return True, T("تم حذف الحساب من السحابة بنجاح!", "User deleted from cloud successfully!")
+    else:
+        return False, T(f"خطأ في الحذف السحابي: {msg_cloud}", f"Cloud deletion error: {msg_cloud}")
 
 # ==========================================
 # 3. دوال المعالجة والمطابقة الذكية للمناطق
@@ -778,7 +790,6 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
 
-# دالة إرسال الإشعارات: إيميل الأدمن بالإنجليزي وإيميل الفيندور بالعربي مع شيت الإكسيل
 def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
     smtp_cfg = load_smtp_config()
     sender_email = smtp_cfg.get("sender_email", "").strip()
@@ -867,10 +878,6 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                     <div class="notice">
                         📎 <b>Attachment:</b> Complete Excel workbook <code>{filename}</code> is attached containing exact polygon coordinates, computed distance (km), delivery fees, delivery SLAs, and Minimum Order Amount.
                     </div>
-
-                    <p style="font-size: 13px; color: #64748b;">
-                        You can review, export, or audit this submission at any time under the <b>Incoming Requests</b> tab in the admin dashboard.
-                    </p>
                 </div>
                 <div class="footer">
                     Automated System Notification • Talabat Logistics & Operations Engine
@@ -945,11 +952,6 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                         <div class="notice">
                             📎 <b>نسخة من طلبكم:</b> مرفق بهذه الرسالة ملف إكسيل كامل <code>{filename}</code> يتضمن كافة تفاصيل المناطق التي قمتم بتعديلها مع المسافات المحسوبة وأوقات ورسوم التوصيل والحد الأدنى للطلب المقترح للاحتفاظ بها في سجلاتكم.
                         </div>
-
-                        <p style="font-size: 13px; color: #64748b;">
-                            <b>ما هي الخطوة القادمة؟</b><br>
-                            يقوم فريق العمليات بمراجعة نطاق التوصيل واعتماد التعديلات، وبمجرد الاعتماد النهائي سيتم تفعيل الإعدادات الجديدة مباشرة على منصة طلبات.
-                        </p>
                     </div>
                     <div class="footer">
                         فريق دعم شركاء وعمليات صيدليات طلبات • جمهورية مصر العربية
@@ -976,13 +978,13 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                 recipients_status.append(submitted_by_email)
 
         server.quit()
-        return True, f"Emails & Excel attachments delivered to: {', '.join(recipients_status)}"
+        return True, "تم الإرسال بنجاح"
     except Exception as e:
-        return False, f"Email delivery failed: {e}"
+        return False, f"فشل الإرسال: {e}"
 
 def get_all_requests_df():
     init_requests_db()
-    cloud_records, _ = cloud_get("get_requests")
+    cloud_records = cloud_get("get_requests")
     
     file_records = []
     if os.path.exists(REQUESTS_FILE):
@@ -1317,6 +1319,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
+# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1334,7 +1337,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (مع زر إعادة ضبط الفلاتر النظيف)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1666,7 +1669,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (مع عرض مؤشرات أداء السلسلة والفرع)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -2419,6 +2422,7 @@ with tab2:
 
                                     saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
                                     
+                                    # إرسال الإيميل بصمت بدون رسالة زرقاء للفيندور
                                     send_request_emails(
                                         vendor_id=v_id, 
                                         vendor_name=b_vname, 
@@ -2427,7 +2431,6 @@ with tab2:
                                     )
 
                                 st.session_state["submission_success_msg"] = T("🎉 تم توثيق واعتماد التعديلات بنجاح في قاعدة البيانات!", "🎉 Modifications saved successfully!")
-
                                 st.session_state["portal_show_diff"] = False
                                 st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
                                 st.rerun()
@@ -2811,6 +2814,7 @@ if is_master_admin:
             st.subheader(T("☁️ فحص اتصال قاعدة البيانات السحابية (Google Sheet Live Sync Test)", "☁️ Google Sheet Live Sync Test"))
             st.caption(f"الرابط السحابي المتصل حالياً: `{CLOUD_DB_URL[:60]}...`")
             
+            # الزر الأزرق لاختبار الاتصال السحابي مباشرة
             if st.button(T("🧪 اختبار الاتصال بجوجل شيت الآن (Test Cloud DB Connection)", "🧪 Test Cloud DB Connection"), type="primary", use_container_width=True, key="btn_test_clouddb"):
                 with st.spinner(T("جارٍ إرسال فحص تجريبي لسيرفر Google Apps Script...", "Testing connection to Google Apps Script...")):
                     ok_db, msg_db = test_cloud_db_connection()
