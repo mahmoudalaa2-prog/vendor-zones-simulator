@@ -82,7 +82,7 @@ def T(ar_text, en_text):
 BRANCH_PALETTE = [
     {"hex": "#28a745", "folium": "green", "name": "أخضر"},
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
-    {"hex": "#9b59b6", "purple": "purple", "name": "بنفسجي"},
+    {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
     {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
@@ -107,7 +107,6 @@ REQUESTS_FILE = "vendor_pricing_requests.csv"
 SMTP_CONFIG_FILE = "smtp_config.json"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
-# الرابط السحابي الدائم المربوط بـ Google Sheet لقاعدة البيانات الحية
 CLOUD_DB_URL = "https://script.google.com/macros/s/AKfycbxeqazFLMccOtIG6hNrupdWNES8yneeD20kbiwAR7K2t4EXNwpRDu85twE3ewjlFVspXQ/exec"
 
 REQUESTS_COLUMNS = [
@@ -133,28 +132,38 @@ def cloud_post(payload):
 
 def cloud_get(action):
     if not CLOUD_DB_URL:
-        return [], "رابط قاعدة البيانات السحابية غير معرف"
+        return []
     try:
         res = requests.get(f"{CLOUD_DB_URL}?action={action}", timeout=25)
         if res.status_code == 200:
             try:
                 data = res.json()
                 if isinstance(data, list):
-                    return data, "OK"
+                    return data
             except Exception:
-                if "accounts.google.com" in res.text:
-                    return [], "تنبيه: يتطلب جوجل سكريبت تسجيل الدخول. يرجى ضبط إعداد Who has access على Anyone"
-        return [], f"استجاب السيرفر بكود: {res.status_code}"
-    except requests.exceptions.Timeout:
-        return [], "انتهت مهلة الانتظار (Timeout)"
-    except Exception as e:
-        return [], f"خطأ اتصال: {e}"
+                pass
+    except Exception:
+        pass
+    return []
 
 def test_cloud_db_connection():
-    data, msg = cloud_get("get_users")
-    if msg == "OK":
-        return True, "الاتصال بقاعدة بيانات Google Sheets يعمل بنجاح تام! السيرفر يقرأ ويكتب بدون مشاكل."
-    return False, f"تعذر الاتصال بقاعدة البيانات السحابية: {msg}"
+    if not CLOUD_DB_URL:
+        return False, "رابط قاعدة البيانات السحابية غير معرف"
+    try:
+        res = requests.get(f"{CLOUD_DB_URL}?action=get_users", timeout=25)
+        if res.status_code == 200:
+            try:
+                data = res.json()
+                if isinstance(data, list):
+                    return True, "الاتصال بقاعدة بيانات Google Sheets يعمل بنجاح تام! السيرفر يقرأ ويكتب بدون مشاكل."
+            except Exception:
+                if "accounts.google.com" in res.text:
+                    return False, "تنبيه: يتطلب جوجل سكريبت تسجيل الدخول. يرجى ضبط إعداد Who has access على Anyone"
+        return False, f"استجاب السيرفر بكود: {res.status_code}"
+    except requests.exceptions.Timeout:
+        return False, "انتهت مهلة الانتظار (Timeout)"
+    except Exception as e:
+        return False, f"خطأ اتصال: {e}"
 
 def load_smtp_config():
     cfg = {
@@ -232,8 +241,8 @@ def init_users_db():
 def get_users_df():
     init_users_db()
     required_cols = ["email", "password", "role", "access_type", "access_ids"]
-    cloud_records, status = cloud_get("get_users")
-    if cloud_records:
+    cloud_records = cloud_get("get_users")
+    if cloud_records and isinstance(cloud_records, list):
         df_cloud = pd.DataFrame(cloud_records)
         for c in required_cols:
             if c not in df_cloud.columns:
@@ -593,9 +602,9 @@ def load_data():
         df_p["fault_cr"] = df_p[col_fault_cr] if col_fault_cr else "-"
 
     if not df_d.empty and not df_v.empty:
-        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id", "Vendor Attributes Vendor Id", "Vendor Code", "Store ID", "Branch ID"])
-        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id", "Chain Attributes Chain ID"])
-        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone", "Zone Name"])
+        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
+        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
+        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
         d_time_col = robust_get_col(df_d, ["Delivery Time", "Time", "Duration"])
         d_fee_col = robust_get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
         d_min_col = robust_get_col(df_d, ["Minimum Amount", "Minimum Order", "Min Order", "Min Amount", "الحد الادنى", "الحد الأدنى"])
@@ -828,7 +837,6 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 
         recipients_status = []
 
-        # 1. إيميل الأدمن الرئيسي (محمود علاء) - بالإنجليزي
         admin_subject = f"🔔 [Action Required] Pricing & Coverage Request - {vendor_name} (ID: {vendor_id})"
         admin_html = f"""
         <!DOCTYPE html>
@@ -902,7 +910,6 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         server.sendmail(sender_email, [admin_recipient], msg_admin.as_string())
         recipients_status.append(admin_recipient)
 
-        # 2. إيميل الفيندور (Vendor Confirmation) - بالعربي
         if submitted_by_email and str(submitted_by_email).strip() and "@" in str(submitted_by_email):
             vendor_subject = f"✅ تم استلام طلبكم بنجاح: تحديث أسعار وتغطية - {vendor_name} (ID: {vendor_id})"
             vendor_html = f"""
@@ -985,6 +992,8 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 def get_all_requests_df():
     init_requests_db()
     cloud_records = cloud_get("get_requests")
+    if not isinstance(cloud_records, list):
+        cloud_records = []
     
     file_records = []
     if os.path.exists(REQUESTS_FILE):
@@ -995,6 +1004,8 @@ def get_all_requests_df():
         except Exception: pass
 
     mem_records = st.session_state.get("session_requests_list", [])
+    if not isinstance(mem_records, list):
+        mem_records = []
     
     all_recs = []
     seen = set()
@@ -1319,7 +1330,6 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1337,7 +1347,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (مع زر إعادة ضبط الفلاتر النظيف)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -1824,6 +1834,9 @@ with tab2:
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
+            # ========================================================
+            # عرض بطاقات أداء السلسلة وأداء الفرع تحت بعض
+            # ========================================================
             st.markdown("---")
             v_perf, c_perf = get_vendor_and_chain_perf(active_vid, found_cid, df_performance)
 
@@ -2422,7 +2435,6 @@ with tab2:
 
                                     saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
                                     
-                                    # إرسال الإيميل بصمت بدون رسالة زرقاء للفيندور
                                     send_request_emails(
                                         vendor_id=v_id, 
                                         vendor_name=b_vname, 
@@ -2814,7 +2826,6 @@ if is_master_admin:
             st.subheader(T("☁️ فحص اتصال قاعدة البيانات السحابية (Google Sheet Live Sync Test)", "☁️ Google Sheet Live Sync Test"))
             st.caption(f"الرابط السحابي المتصل حالياً: `{CLOUD_DB_URL[:60]}...`")
             
-            # الزر الأزرق لاختبار الاتصال السحابي مباشرة
             if st.button(T("🧪 اختبار الاتصال بجوجل شيت الآن (Test Cloud DB Connection)", "🧪 Test Cloud DB Connection"), type="primary", use_container_width=True, key="btn_test_clouddb"):
                 with st.spinner(T("جارٍ إرسال فحص تجريبي لسيرفر Google Apps Script...", "Testing connection to Google Apps Script...")):
                     ok_db, msg_db = test_cloud_db_connection()
