@@ -84,14 +84,14 @@ BRANCH_PALETTE = [
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
     {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
-    {"hex": "#8540f5", "folium": "darkpurple", "name": "أرجواني"},
+    {"hex": "#8540f5", "darkpurple": "darkpurple", "name": "أرجواني"},
     {"hex": "#a52a2a", "folium": "darkred", "name": "بني"},
     {"hex": "#ffc107", "folium": "orange", "name": "أصفر ذهبي"},
-    {"hex": "#20c997", "folium": "cadetblue", "name": "تيل"},
+    {"hex": "#20c997", "cadetblue": "cadetblue", "name": "تيل"},
     {"hex": "#6610f2", "folium": "darkpurple", "name": "نيلي"},
     {"hex": "#fd7e14", "folium": "orange", "name": "برتقالي فاقع"},
     {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
@@ -1214,7 +1214,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (مع التحديث الفوري لإعادة ضبط الفلاتر)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -1476,17 +1476,17 @@ if is_admin:
                     mean_lat = float(plot_vendors["lat"].mean())
                     mean_lng = float(plot_vendors["lng"].mean())
                     map_center = [mean_lat, mean_lng] if (pd.notna(mean_lat) and pd.notna(mean_lng)) else [30.0444, 31.2357]
-                    zoom_lvl = 12 if selected_chains else (10 if selected_cities else 9)
+                    zoom_lvl = 12 if selected_chains else (10 if selected_cities else 7)
                 else:
                     map_center = [30.0444, 31.2357]
-                    zoom_lvl = 8
+                    zoom_lvl = 7
 
                 m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl)
                 
                 map_custom_css = (
                     "<style>"
                     ".leaflet-interactive:focus {outline: none !important;}"
-                    "path.leaflet-interactive:hover {cursor: pointer; stroke: #ff5a00 !important; stroke-width: 3.5px !important;}"
+                    "path.leaflet-interactive:hover {cursor: pointer; stroke: #ffc107 !important; stroke-width: 3.5px !important;}"
                     "</style>"
                 )
                 m_admin.get_root().html.add_child(folium.Element(map_custom_css))
@@ -1502,7 +1502,7 @@ if is_admin:
                             "fillOpacity": feature["properties"].get("fill_opacity", 0.08)
                         },
                         highlight_function=lambda feature: {
-                            "color": "#ff5a00",
+                            "color": "#ffc107",
                             "weight": 3.5,
                             "fillOpacity": 0.65
                         },
@@ -1546,7 +1546,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal
+# Tab 2: Vendor Portal (مع عرض مؤشرات أداء السلسلة والفرع)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1702,6 +1702,67 @@ with tab2:
 
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
+
+            # ========================================================
+            # عرض بطاقات أداء السلسلة وأداء الفرع تحت بعض
+            # ========================================================
+            st.markdown("---")
+            v_perf, c_perf = get_vendor_and_chain_perf(active_vid, found_cid, df_performance)
+
+            # 1. بطاقات أداء السلسلة بالكامل (Chain Performance)
+            chain_label_name = vd.iloc[0].get("clean_chain_name", f"Chain {found_cid}")
+            st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #ff5a00; margin-bottom: 8px;'>🏢 {T('أداء السلسلة بالكامل', 'Entire Chain Performance')}: <span style='color: #ffffff;'>{chain_label_name} (ID: {found_cid})</span></div>", unsafe_allow_html=True)
+            
+            c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
+            with c_kpi1:
+                st.metric(
+                    label=T("📦 QC Net Orders (السلسلة)", "QC Net Orders (Chain)"),
+                    value=str(c_perf.get("qc_orders", "-"))
+                )
+            with c_kpi2:
+                st.metric(
+                    label=T("⚠️ Vendor Net Failed Orders (السلسلة)", "Failed Orders (Chain)"),
+                    value=str(c_perf.get("fail_orders", "-")),
+                    delta=T("ملغاة", "failed"),
+                    delta_color="inverse"
+                )
+            with c_kpi3:
+                st.metric(
+                    label=T("📉 Vendor Net Fail Rate (السلسلة)", "Fail Rate (Chain)"),
+                    value=str(c_perf.get("fail_rate", "-")),
+                    delta_color="inverse"
+                )
+
+            st.write("")
+            # 2. بطاقات أداء الفرع المحدد (Vendor Performance)
+            st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #28a745; margin-bottom: 8px;'>💊 {T('أداء الفرع المحدد حالياً', 'Selected Branch Performance')}: <span style='color: #ffffff;'>{active_branch_name} (ID: {active_vid})</span></div>", unsafe_allow_html=True)
+            
+            v_kpi1, v_kpi2, v_kpi3, v_kpi4 = st.columns(4)
+            with v_kpi1:
+                st.metric(
+                    label=T("📦 QC Net Orders (الفرع)", "QC Net Orders (Vendor)"),
+                    value=str(v_perf.get("qc_orders", "-"))
+                )
+            with v_kpi2:
+                st.metric(
+                    label=T("⚠️ Vendor Net Failed Orders (الفرع)", "Failed Orders (Vendor)"),
+                    value=str(v_perf.get("fail_orders", "-")),
+                    delta=T("ملغاة", "failed"),
+                    delta_color="inverse"
+                )
+            with v_kpi3:
+                st.metric(
+                    label=T("📉 Vendor Net Fail Rate (الفرع)", "Fail Rate (Vendor)"),
+                    value=str(v_perf.get("fail_rate", "-")),
+                    delta_color="inverse"
+                )
+            with v_kpi4:
+                st.metric(
+                    label=T("📞 Vendor Fault Customer CR", "Vendor Fault CR"),
+                    value=str(v_perf.get("fault_cr", "-")),
+                    delta_color="inverse"
+                )
+            st.markdown("---")
 
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
