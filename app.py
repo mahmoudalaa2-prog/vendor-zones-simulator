@@ -21,7 +21,7 @@ from email import encoders
 from datetime import datetime
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم بهوية طلبات
+# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
@@ -100,7 +100,7 @@ BRANCH_PALETTE = [
 DELIVERY_TIME_CHOICES = ["20 mins", "25 mins", "30 mins", "35 mins", "40 mins", "45 mins", "50 mins", "55 mins", "60 mins"]
 
 # ==========================================
-# 2. إدارة المستخدمين وقاعدة البيانات السحابية (Google Sheets Cloud DB)
+# 2. إدارة المستخدمين وقاعدة البيانات السحابية الحية (Google Sheets Cloud DB)
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
@@ -116,25 +116,41 @@ REQUESTS_COLUMNS = [
 
 def cloud_post(payload):
     if not CLOUD_DB_URL:
-        return False
+        return False, "رابط قاعدة البيانات السحابية غير معرف"
     try:
-        res = requests.post(CLOUD_DB_URL, json=payload, timeout=10)
-        return res.status_code in [200, 302]
-    except Exception:
-        return False
+        res = requests.post(CLOUD_DB_URL, json=payload, timeout=25)
+        if res.status_code in [200, 302]:
+            return True, "تم الحفظ سحابياً بنجاح"
+        return False, f"استجاب سيرفر جوجل بكود: {res.status_code}"
+    except requests.exceptions.Timeout:
+        return False, "انتهت مهلة انتظار سيرفر جوجل سكريبت (Timeout). يرجى المحاولة مرة أخرى."
+    except Exception as e:
+        return False, f"خطأ اتصال: {e}"
 
 def cloud_get(action):
     if not CLOUD_DB_URL:
-        return []
+        return [], "رابط قاعدة البيانات السحابية غير معرف"
     try:
-        res = requests.get(f"{CLOUD_DB_URL}?action={action}", timeout=10)
+        res = requests.get(f"{CLOUD_DB_URL}?action={action}", timeout=25)
         if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, list):
-                return data
-    except Exception:
-        pass
-    return []
+            try:
+                data = res.json()
+                if isinstance(data, list):
+                    return data, "OK"
+            except Exception:
+                if "accounts.google.com" in res.text:
+                    return [], "تنبيه: يتطلب جوجل سكريبت تسجيل الدخول. يرجى ضبط إعداد Who has access على Anyone"
+        return [], f"استجاب السيرفر بكود: {res.status_code}"
+    except requests.exceptions.Timeout:
+        return [], "انتهت مهلة الانتظار (Timeout)"
+    except Exception as e:
+        return [], f"خطأ اتصال: {e}"
+
+def test_cloud_db_connection():
+    data, msg = cloud_get("get_users")
+    if msg == "OK":
+        return True, "الاتصال بقاعدة بيانات Google Sheets يعمل بنجاح تام! السيرفر يقرأ ويكتب بدون مشاكل."
+    return False, f"تعذر الاتصال بقاعدة البيانات السحابية: {msg}"
 
 def load_smtp_config():
     cfg = {
@@ -212,7 +228,7 @@ def init_users_db():
 def get_users_df():
     init_users_db()
     required_cols = ["email", "password", "role", "access_type", "access_ids"]
-    cloud_records = cloud_get("get_users")
+    cloud_records, status = cloud_get("get_users")
     if cloud_records:
         df_cloud = pd.DataFrame(cloud_records)
         for c in required_cols:
@@ -273,14 +289,18 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
         "access_ids": str(access_ids)
     }
     
-    cloud_post({"action": "add_user", "user": user_dict})
+    ok_cloud, msg_cloud = cloud_post({"action": "add_user", "user": user_dict})
     
     new_user = pd.DataFrame([user_dict])
     df = pd.concat([df, new_user], ignore_index=True)
     try:
         df.to_csv(USERS_FILE, index=False)
     except Exception: pass
-    return True, T("تم إنشاء الحساب وحفظه في قاعدة البيانات السحابية بنجاح!", "User created and permanently saved to cloud!")
+    
+    if ok_cloud:
+        return True, T("تم إنشاء الحساب وحفظه في Google Sheets سحابياً بنجاح!", "User created and synced to Google Sheets!")
+    else:
+        return True, T(f"تم إنشاء الحساب محلياً، مع تنبيه المزامنة: {msg_cloud}", f"Created locally: {msg_cloud}")
 
 def update_user_permissions(email, role, access_type, access_ids, new_password=None, current_user_dict=None):
     if not check_is_master_admin(current_user_dict):
@@ -314,7 +334,7 @@ def update_user_permissions(email, role, access_type, access_ids, new_password=N
         try:
             df.to_csv(USERS_FILE, index=False)
         except Exception: pass
-        return True, T("تم تحديث البيانات وكلمة المرور في السحابة بنجاح!", "User updated and synced to cloud!"), df.iloc[idx[0]].to_dict()
+        return True, T("تم تحديث البيانات وكلمة المرور ومزامنتها سحابياً!", "User updated and synced to cloud!"), df.iloc[idx[0]].to_dict()
     return False, T("المستخدم غير موجود.", "User not found."), None
 
 def delete_user(email, current_user_dict=None):
@@ -962,7 +982,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 
 def get_all_requests_df():
     init_requests_db()
-    cloud_records = cloud_get("get_requests")
+    cloud_records, _ = cloud_get("get_requests")
     
     file_records = []
     if os.path.exists(REQUESTS_FILE):
@@ -1297,7 +1317,6 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# تبويب المستخدمين والصلاحيات متاح حصرياً للأدمن الرئيسي
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1315,7 +1334,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map (مع زر إعادة ضبط الفلاتر النظيف)
+# Tab 1: Admin Map
 # ==========================================
 if is_admin:
     with tab1:
@@ -1647,15 +1666,13 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع عرض مؤشرات أداء السلسلة والفرع)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
     
     if "submission_success_msg" in st.session_state:
         st.success(st.session_state.pop("submission_success_msg"))
-    if "submission_mail_info" in st.session_state:
-        st.info(st.session_state.pop("submission_mail_info"))
 
     t_vid = ""
     p_vends = pd.DataFrame()
@@ -1804,9 +1821,6 @@ with tab2:
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
-            # ========================================================
-            # عرض بطاقات أداء السلسلة وأداء الفرع تحت بعض
-            # ========================================================
             st.markdown("---")
             v_perf, c_perf = get_vendor_and_chain_perf(active_vid, found_cid, df_performance)
 
@@ -2374,7 +2388,6 @@ with tab2:
 
                     with c_act1:
                         if st.button(T("✅ اعتماد التعديلات وإرسالها للإدارة", "✅ Finalize & Send Modifications to Admin"), type="primary", use_container_width=True):
-                            mail_notifs = []
                             valid_indices = [idx_r for idx_r, r in edited_diff.iterrows() if not r.get("Discard", False)]
                             filtered_diff_df = diff_df.loc[valid_indices].copy()
 
@@ -2406,20 +2419,14 @@ with tab2:
 
                                     saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
                                     
-                                    ok_mail, mail_msg = send_request_emails(
+                                    send_request_emails(
                                         vendor_id=v_id, 
                                         vendor_name=b_vname, 
                                         records_df=saved_records_df,
                                         submitted_by_email=current_user.get("email", "")
                                     )
-                                    mail_notifs.append((b_vname, ok_mail, mail_msg))
 
                                 st.session_state["submission_success_msg"] = T("🎉 تم توثيق واعتماد التعديلات بنجاح في قاعدة البيانات!", "🎉 Modifications saved successfully!")
-                                for vn, ok_m, m_msg in mail_notifs:
-                                    if ok_m:
-                                        st.session_state["submission_mail_info"] = f"📧 {m_msg}"
-                                    else:
-                                        st.session_state["submission_mail_info"] = f"ℹ️ {vn}: {m_msg}"
 
                                 st.session_state["portal_show_diff"] = False
                                 st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
@@ -2584,7 +2591,7 @@ if is_admin:
             st.info(T("📭 لا توجد طلبات تعديل واردة حالياً من الفروع. (عند إرسال أي تعديل من Vendor Portal سيظهر هنا فوراً)", "📭 No incoming requests found. Submit modifications in Vendor Portal to view them here."))
 
 # ==========================================
-# Tab 4: Users Management & Email Settings
+# Tab 4: Users Management & Email/Cloud Settings
 # ==========================================
 if is_master_admin:
     with tab4:
@@ -2614,11 +2621,17 @@ if is_master_admin:
             T("➕ إضافة مستخدم جديد", "➕ Add New User"),
             T("✏️ تعديل صلاحيات وكلمة مرور مستخدم", "✏️ Edit Permissions & Password"),
             T("📋 قائمة المستخدمين", "📋 Users List"),
-            T("📧 إعدادات واختبار البريد (Email SMTP Settings)", "📧 Email SMTP Settings")
+            T("📧 إعدادات البريد والسحابة (Cloud & SMTP Settings)", "📧 Cloud & SMTP Settings")
         ])
         
         with tab_u1:
             st.markdown(f"#### {T('بيانات الحساب الجديد', 'New Account Details')}")
+            
+            if "user_created_alert" in st.session_state:
+                alert_type, alert_txt = st.session_state.pop("user_created_alert")
+                if alert_type == "success": st.success(alert_txt)
+                else: st.error(alert_txt)
+
             col_u1, col_u2 = st.columns(2)
             with col_u1:
                 u_role = st.selectbox(
@@ -2677,12 +2690,10 @@ if is_master_admin:
                 elif ("Chain" in access_choice or "Vendor" in access_choice) and not selected_access_ids_str.strip():
                     st.error(T("يرجى اختيار سلسلة أو فرع واحد على الأقل من القائمة."))
                 else:
-                    ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
-                    if ok:
-                        st.success(msg)
+                    with st.spinner(T("جارٍ إنشاء الحساب ومزامنته سحابياً مع Google Sheets...", "Creating and syncing user to cloud...")):
+                        ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
+                        st.session_state["user_created_alert"] = ("success" if ok else "error", msg)
                         st.rerun()
-                    else:
-                        st.error(msg)
 
         with tab_u2:
             st.subheader(T("تعديل صلاحيات ومحفظة فروع وكلمة مرور مستخدم مسجل", "Edit User Permissions, Portfolio & Password"))
@@ -2759,21 +2770,22 @@ if is_master_admin:
 
             st.write("")
             if st.button(T("💾 حفظ التعديلات وتحديث الصلاحيات", "💾 Save Changes & Permissions"), type="primary", use_container_width=True, key="btn_edit_user_submit"):
-                ok, msg, updated_row = update_user_permissions(
-                    selected_edit_user, 
-                    e_role, 
-                    e_access_type, 
-                    e_selected_access_ids_str, 
-                    edit_password_val, 
-                    current_user_dict=current_user
-                )
-                if ok:
-                    if selected_edit_user.lower() == current_user["email"].lower():
-                        st.session_state["current_user"] = updated_row
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
+                with st.spinner(T("جارٍ تحديث البيانات ومزامنتها سحابياً...", "Updating user in cloud...")):
+                    ok, msg, updated_row = update_user_permissions(
+                        selected_edit_user, 
+                        e_role, 
+                        e_access_type, 
+                        e_selected_access_ids_str, 
+                        edit_password_val, 
+                        current_user_dict=current_user
+                    )
+                    if ok:
+                        if selected_edit_user.lower() == current_user["email"].lower():
+                            st.session_state["current_user"] = updated_row
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
         with tab_u3:
             users_list_df = get_users_df()
@@ -2787,14 +2799,27 @@ if is_master_admin:
                 st.markdown("---")
                 to_del = st.selectbox(T("اختر المستخدم للحذف:", "Select User to Delete:"), deletable, key="delete_user_select")
                 if st.button(T("حذف الحساب نهائياً", "Delete User"), type="secondary", key="btn_delete_user"):
-                    ok, msg = delete_user(to_del, current_user_dict=current_user)
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                    with st.spinner(T("جارٍ حذف الحساب من السحابة...", "Deleting from cloud...")):
+                        ok, msg = delete_user(to_del, current_user_dict=current_user)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
         with tab_u4:
+            st.subheader(T("☁️ فحص اتصال قاعدة البيانات السحابية (Google Sheet Live Sync Test)", "☁️ Google Sheet Live Sync Test"))
+            st.caption(f"الرابط السحابي المتصل حالياً: `{CLOUD_DB_URL[:60]}...`")
+            
+            if st.button(T("🧪 اختبار الاتصال بجوجل شيت الآن (Test Cloud DB Connection)", "🧪 Test Cloud DB Connection"), type="primary", use_container_width=True, key="btn_test_clouddb"):
+                with st.spinner(T("جارٍ إرسال فحص تجريبي لسيرفر Google Apps Script...", "Testing connection to Google Apps Script...")):
+                    ok_db, msg_db = test_cloud_db_connection()
+                    if ok_db:
+                        st.success(f"✅ {msg_db}")
+                    else:
+                        st.error(f"❌ {msg_db}")
+
+            st.markdown("---")
             st.subheader(T("⚙️ إعدادات واختبار خادم البريد الإلكتروني (SMTP Settings)", "⚙️ SMTP Settings & Live Test"))
             st.caption(T(
                 "اضبط بريد الراسل وكلمة مرور التطبيق هنا لكي يقوم النظام بإرسال الإيميلات وشيتات الإكسيل تلقائياً لك وللفيندور عند تقديم أي طلب.",
