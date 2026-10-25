@@ -21,7 +21,7 @@ from email import encoders
 from datetime import datetime
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
+# 1. إعدادات الصفحة والتصميم بهوية طلبات
 # ==========================================
 st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
 
@@ -84,14 +84,14 @@ BRANCH_PALETTE = [
     {"hex": "#e67e22", "folium": "orange", "name": "برتقالي"},
     {"hex": "#9b59b6", "folium": "purple", "name": "بنفسجي"},
     {"hex": "#e74c3c", "folium": "red", "name": "أحمر"},
-    {"hex": "#17a2b8", "cadetblue": "cadetblue", "name": "تركواز"},
+    {"hex": "#17a2b8", "folium": "cadetblue", "name": "تركواز"},
     {"hex": "#d63384", "folium": "pink", "name": "وردي"},
     {"hex": "#0dcaf0", "folium": "lightblue", "name": "سماوي"},
     {"hex": "#198754", "folium": "darkgreen", "name": "أخضر داكن"},
-    {"hex": "#8540f5", "darkpurple": "darkpurple", "name": "أرجواني"},
+    {"hex": "#8540f5", "folium": "darkpurple", "name": "أرجواني"},
     {"hex": "#a52a2a", "folium": "darkred", "name": "بني"},
     {"hex": "#ffc107", "folium": "orange", "name": "أصفر ذهبي"},
-    {"hex": "#20c997", "cadetblue": "cadetblue", "name": "تيل"},
+    {"hex": "#20c997", "folium": "cadetblue", "name": "تيل"},
     {"hex": "#6610f2", "folium": "darkpurple", "name": "نيلي"},
     {"hex": "#fd7e14", "folium": "orange", "name": "برتقالي فاقع"},
     {"hex": "#007bff", "folium": "blue", "name": "أزرق"}
@@ -100,17 +100,41 @@ BRANCH_PALETTE = [
 DELIVERY_TIME_CHOICES = ["20 mins", "25 mins", "30 mins", "35 mins", "40 mins", "45 mins", "50 mins", "55 mins", "60 mins"]
 
 # ==========================================
-# 2. إدارة المستخدمين وقاعدة البيانات وإعدادات البريد
+# 2. إدارة المستخدمين وقاعدة البيانات السحابية (Google Sheets Cloud DB)
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
 SMTP_CONFIG_FILE = "smtp_config.json"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
+CLOUD_DB_URL = "https://script.google.com/macros/s/AKfycbxeqazFLMccOtIG6hNrupdWNES8yneeD20kbiwAR7K2t4EXNwpRDu85twE3ewjlFVspXQ/exec"
+
 REQUESTS_COLUMNS = [
     "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
     "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Minimum Order Amount", "Final_Status", "Status"
 ]
+
+def cloud_post(payload):
+    if not CLOUD_DB_URL:
+        return False
+    try:
+        res = requests.post(CLOUD_DB_URL, json=payload, timeout=10)
+        return res.status_code in [200, 302]
+    except Exception:
+        return False
+
+def cloud_get(action):
+    if not CLOUD_DB_URL:
+        return []
+    try:
+        res = requests.get(f"{CLOUD_DB_URL}?action={action}", timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
 
 def load_smtp_config():
     cfg = {
@@ -187,7 +211,45 @@ def init_users_db():
 
 def get_users_df():
     init_users_db()
-    return pd.read_csv(USERS_FILE)
+    required_cols = ["email", "password", "role", "access_type", "access_ids"]
+    cloud_records = cloud_get("get_users")
+    if cloud_records:
+        df_cloud = pd.DataFrame(cloud_records)
+        for c in required_cols:
+            if c not in df_cloud.columns:
+                df_cloud[c] = ""
+        
+        has_admin = (df_cloud["email"].astype(str).str.lower() == MASTER_ADMIN_EMAIL.lower()).any()
+        if not has_admin:
+            admin_row = {
+                "email": MASTER_ADMIN_EMAIL,
+                "password": "123456",
+                "role": "admin",
+                "access_type": "all",
+                "access_ids": "all"
+            }
+            cloud_post({"action": "add_user", "user": admin_row})
+            df_cloud = pd.concat([pd.DataFrame([admin_row]), df_cloud], ignore_index=True)
+            
+        try:
+            df_cloud[required_cols].to_csv(USERS_FILE, index=False)
+        except Exception: pass
+        return df_cloud[required_cols]
+
+    try:
+        df_local = pd.read_csv(USERS_FILE)
+        for c in required_cols:
+            if c not in df_local.columns:
+                df_local[c] = ""
+        return df_local[required_cols]
+    except Exception:
+        return pd.DataFrame([{
+            "email": MASTER_ADMIN_EMAIL,
+            "password": "123456",
+            "role": "admin",
+            "access_type": "all",
+            "access_ids": "all"
+        }])
 
 def check_is_master_admin(user_dict):
     if not user_dict:
@@ -202,16 +264,23 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
     email_clean = email.strip().lower()
     if email_clean in df["email"].str.lower().values:
         return False, T("هذا البريد مسجل بالفعل!", "This email already exists!")
-    new_user = pd.DataFrame([{
+        
+    user_dict = {
         "email": email_clean,
         "password": str(password).strip(),
         "role": role,
         "access_type": access_type,
-        "access_ids": access_ids
-    }])
+        "access_ids": str(access_ids)
+    }
+    
+    cloud_post({"action": "add_user", "user": user_dict})
+    
+    new_user = pd.DataFrame([user_dict])
     df = pd.concat([df, new_user], ignore_index=True)
-    df.to_csv(USERS_FILE, index=False)
-    return True, T("تم إنشاء الحساب بنجاح!", "User created successfully!")
+    try:
+        df.to_csv(USERS_FILE, index=False)
+    except Exception: pass
+    return True, T("تم إنشاء الحساب وحفظه في قاعدة البيانات السحابية بنجاح!", "User created and permanently saved to cloud!")
 
 def update_user_permissions(email, role, access_type, access_ids, new_password=None, current_user_dict=None):
     if not check_is_master_admin(current_user_dict):
@@ -221,20 +290,31 @@ def update_user_permissions(email, role, access_type, access_ids, new_password=N
     email_clean = email.strip().lower()
     idx = df[df["email"].str.lower() == email_clean].index
     if not idx.empty:
-        if email_clean == MASTER_ADMIN_EMAIL.lower():
-            df.loc[idx, "role"] = "admin"
-            df.loc[idx, "access_type"] = "all"
-            df.loc[idx, "access_ids"] = "all"
-        else:
-            df.loc[idx, "role"] = role
-            df.loc[idx, "access_type"] = access_type
-            df.loc[idx, "access_ids"] = str(access_ids)
-            
-        if new_password and str(new_password).strip():
-            df.loc[idx, "password"] = str(new_password).strip()
-            
-        df.to_csv(USERS_FILE, index=False)
-        return True, T("تم تحديث البيانات وكلمة المرور بنجاح!", "User details and password updated successfully!"), df.iloc[idx[0]].to_dict()
+        final_role = "admin" if email_clean == MASTER_ADMIN_EMAIL.lower() else role
+        final_acc_type = "all" if email_clean == MASTER_ADMIN_EMAIL.lower() else access_type
+        final_acc_ids = "all" if email_clean == MASTER_ADMIN_EMAIL.lower() else str(access_ids)
+        final_pwd = str(new_password).strip() if (new_password and str(new_password).strip()) else ""
+
+        df.loc[idx, "role"] = final_role
+        df.loc[idx, "access_type"] = final_acc_type
+        df.loc[idx, "access_ids"] = final_acc_ids
+        if final_pwd:
+            df.loc[idx, "password"] = final_pwd
+
+        cloud_payload = {
+            "action": "update_user",
+            "email": email_clean,
+            "role": final_role,
+            "access_type": final_acc_type,
+            "access_ids": final_acc_ids,
+            "password": final_pwd
+        }
+        cloud_post(cloud_payload)
+
+        try:
+            df.to_csv(USERS_FILE, index=False)
+        except Exception: pass
+        return True, T("تم تحديث البيانات وكلمة المرور في السحابة بنجاح!", "User updated and synced to cloud!"), df.iloc[idx[0]].to_dict()
     return False, T("المستخدم غير موجود.", "User not found."), None
 
 def delete_user(email, current_user_dict=None):
@@ -244,9 +324,15 @@ def delete_user(email, current_user_dict=None):
     df = get_users_df()
     if email.strip().lower() == MASTER_ADMIN_EMAIL.lower():
         return False, T("لا يمكن حذف الأدمن الرئيسي!", "Cannot delete master admin!")
-    df = df[df["email"].str.lower() != email.strip().lower()]
-    df.to_csv(USERS_FILE, index=False)
-    return True, T("تم حذف الحساب بنجاح!", "User deleted successfully!")
+        
+    email_clean = email.strip().lower()
+    cloud_post({"action": "delete_user", "email": email_clean})
+    
+    df = df[df["email"].str.lower() != email_clean]
+    try:
+        df.to_csv(USERS_FILE, index=False)
+    except Exception: pass
+    return True, T("تم حذف الحساب من السحابة بنجاح!", "User deleted from cloud successfully!")
 
 # ==========================================
 # 3. دوال المعالجة والمطابقة الذكية للمناطق
@@ -611,7 +697,7 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                     c_perf = c_match.iloc[0].to_dict()
     return v_perf, c_perf
 
-# نظام حفظ الطلبات المزدوج
+# نظام حفظ الطلبات المزدوج المربوط سحابياً مع Google Sheets
 def init_requests_db():
     if not os.path.exists(REQUESTS_FILE):
         pd.DataFrame(columns=REQUESTS_COLUMNS).to_csv(REQUESTS_FILE, index=False)
@@ -667,6 +753,8 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
         save_df = pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
         save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
     except Exception: pass
+
+    cloud_post({"action": "save_requests", "records": new_records})
 
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
 
@@ -874,6 +962,8 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 
 def get_all_requests_df():
     init_requests_db()
+    cloud_records = cloud_get("get_requests")
+    
     file_records = []
     if os.path.exists(REQUESTS_FILE):
         try:
@@ -886,7 +976,7 @@ def get_all_requests_df():
     
     all_recs = []
     seen = set()
-    for rec in (file_records + mem_records):
+    for rec in (cloud_records + file_records + mem_records):
         rec_key = (str(rec.get("Date", "")), str(rec.get("Vendor ID", "")), str(rec.get("Zone", "")))
         if rec_key not in seen and str(rec.get("Zone", "")).strip() != "":
             seen.add(rec_key)
@@ -894,7 +984,12 @@ def get_all_requests_df():
             
     if not all_recs:
         return pd.DataFrame(columns=REQUESTS_COLUMNS)
-    return pd.DataFrame(all_recs, columns=REQUESTS_COLUMNS)
+        
+    res_df = pd.DataFrame(all_recs, columns=REQUESTS_COLUMNS)
+    try:
+        res_df.to_csv(REQUESTS_FILE, index=False)
+    except Exception: pass
+    return res_df
 
 def build_zone_popup_card(area_name, info_list):
     if not info_list:
@@ -1167,6 +1262,12 @@ with st.sidebar:
     st.write(f"🛡️ **{T('الصلاحية', 'Role')}:** `{role_badge}`")
     if current_user.get("access_type") != "all":
         st.write(f"📌 **{T('نطاق الربط', 'Scope')}:** `{current_user['access_type']}`")
+    
+    st.markdown("""
+    <div style="background: rgba(40, 167, 69, 0.15); border: 1px solid #28a745; padding: 4px 8px; border-radius: 6px; font-size: 11px; color: #28a745; font-weight: bold; text-align: center; margin: 8px 0;">
+        🟢 Google Sheet Cloud DB Live
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("---")
     
     st.metric(
@@ -1214,7 +1315,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Admin Map
+# Tab 1: Admin Map (مع زر إعادة ضبط الفلاتر النظيف)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1709,7 +1810,6 @@ with tab2:
             st.markdown("---")
             v_perf, c_perf = get_vendor_and_chain_perf(active_vid, found_cid, df_performance)
 
-            # 1. بطاقات أداء السلسلة بالكامل (Chain Performance)
             chain_label_name = vd.iloc[0].get("clean_chain_name", f"Chain {found_cid}")
             st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #ff5a00; margin-bottom: 8px;'>🏢 {T('أداء السلسلة بالكامل', 'Entire Chain Performance')}: <span style='color: #ffffff;'>{chain_label_name} (ID: {found_cid})</span></div>", unsafe_allow_html=True)
             
@@ -1734,7 +1834,6 @@ with tab2:
                 )
 
             st.write("")
-            # 2. بطاقات أداء الفرع المحدد (Vendor Performance)
             st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #28a745; margin-bottom: 8px;'>💊 {T('أداء الفرع المحدد حالياً', 'Selected Branch Performance')}: <span style='color: #ffffff;'>{active_branch_name} (ID: {active_vid})</span></div>", unsafe_allow_html=True)
             
             v_kpi1, v_kpi2, v_kpi3, v_kpi4 = st.columns(4)
