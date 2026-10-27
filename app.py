@@ -602,9 +602,9 @@ def load_data():
         df_p["fault_cr"] = df_p[col_fault_cr] if col_fault_cr else "-"
 
     if not df_d.empty and not df_v.empty:
-        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
-        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
-        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
+        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id", "Vendor Attributes Vendor Id", "Vendor Code", "Store ID", "Branch ID"])
+        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id", "Chain Attributes Chain ID"])
+        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone", "Zone Name"])
         d_time_col = robust_get_col(df_d, ["Delivery Time", "Time", "Duration"])
         d_fee_col = robust_get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
         d_min_col = robust_get_col(df_d, ["Minimum Amount", "Minimum Order", "Min Order", "Min Amount", "الحد الادنى", "الحد الأدنى"])
@@ -1679,7 +1679,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع عرض مؤشرات أداء السلسلة والفرع)
+# Tab 2: Vendor Portal (مع خاصية رفع الملف والتعامل الذكي مع السلسلة والفرع)
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -2079,6 +2079,115 @@ with tab2:
                         unsafe_allow_html=True
                     )
 
+                # ========================================================
+                # ميزة رفع ملف إكسيل / CSV مجمع (Bulk Upload)
+                # ========================================================
+                with st.expander(T("📂 رفع ملف إكسيل / CSV مجمع للمناطق (Bulk Upload)", "📂 Bulk Upload CSV / Excel"), expanded=False):
+                    st.caption(T(
+                        "ارفع ملف إكسيل أو CSV يحتوي على أعمدة: (Zone, Delivery Time, Delivery Fees, Minimum Order Amount) مع إمكانية إضافة كود الفرع (Vendor ID) لتوزيع عدة فروع بالسلسلة.",
+                        "Upload Excel or CSV file containing: (Zone, Delivery Time, Delivery Fees, Minimum Order Amount) with optional (Vendor ID)."
+                    ))
+                    
+                    sample_template_df = pd.DataFrame([
+                        {"Vendor ID": active_vid, "Zone": all_known_zones[0] if all_known_zones else "Dokki", "Delivery Time": "45 mins", "Delivery Fees": 25.0, "Minimum Order Amount": 0.0},
+                        {"Vendor ID": active_vid, "Zone": all_known_zones[1] if len(all_known_zones) > 1 else "Mohandessin", "Delivery Time": "30 mins", "Delivery Fees": 20.0, "Minimum Order Amount": 50.0}
+                    ])
+                    csv_template_bytes = sample_template_df.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        T("📥 تحميل نموذج ملف فارغ (Download Template)", "📥 Download Template CSV"),
+                        data=csv_template_bytes,
+                        file_name="zones_upload_template.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+                    uploaded_bulk_file = st.file_uploader(
+                        T("اختر ملف الإكسيل أو الـ CSV:", "Choose File:"),
+                        type=["csv", "xlsx", "xls"],
+                        key=f"bulk_upload_file_input_{portal_session_key}"
+                    )
+                    
+                    if uploaded_bulk_file is not None:
+                        if st.button(T("🚀 استيراد وتحديث الخريطة فوراً", "🚀 Import & Update Map"), type="primary", use_container_width=True):
+                            try:
+                                if uploaded_bulk_file.name.endswith(".csv"):
+                                    up_df = pd.read_csv(uploaded_bulk_file)
+                                else:
+                                    up_df = pd.read_excel(uploaded_bulk_file)
+                                    
+                                if up_df.empty:
+                                    st.error(T("الملف المرفوع فارغ!", "Uploaded file is empty!"))
+                                else:
+                                    c_vid = robust_get_col(up_df, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id", "كود الفرع", "رقم الفرع"])
+                                    c_zone = robust_get_col(up_df, ["Zone", "Zone Name", "Area", "Area Name", "Delivery Location Area Name", "اسم المنطقة", "المنطقة"])
+                                    c_time = robust_get_col(up_df, ["Delivery Time", "Time", "Duration", "وقت التوصيل", "الوقت"])
+                                    c_fee = robust_get_col(up_df, ["Delivery Fees", "Delivery Fee", "Fee", "Fees", "Price", "رسوم التوصيل", "السعر"])
+                                    c_min = robust_get_col(up_df, ["Minimum Order Amount", "Minimum Amount", "Min Order", "Min Amount", "الحد الادنى", "الحد الأدنى"])
+                                    
+                                    if not c_zone:
+                                        st.error(T("لم يتم العثور على عمود اسم المنطقة (Zone) في الملف المرفوع!", "Zone column not found!"))
+                                    else:
+                                        allowed_vids = set(branch_names.keys())
+                                        imported_count = 0
+                                        
+                                        for _, r_up in up_df.iterrows():
+                                            target_row_vid = active_vid
+                                            if c_vid and pd.notna(r_up[c_vid]):
+                                                candidate_vid = normalize_id(r_up[c_vid])
+                                                if candidate_vid in allowed_vids:
+                                                    target_row_vid = candidate_vid
+                                            
+                                            raw_z = str(r_up[c_zone]).strip()
+                                            matched_zone = resolve_zone_name(raw_z)
+                                            
+                                            if matched_zone:
+                                                r_t = str(r_up[c_time]).strip() if (c_time and pd.notna(r_up[c_time])) else "45 mins"
+                                                if not r_t or r_t.lower() in ["nan", "none", "null", "-"]:
+                                                    r_t = "45 mins"
+                                                if r_t not in DELIVERY_TIME_CHOICES:
+                                                    r_t_digits = re.findall(r'\d+', r_t)
+                                                    if r_t_digits:
+                                                        closest_val = min(max(int(r_t_digits[0]), 20), 60)
+                                                        closest_5 = 5 * round(closest_val / 5.0)
+                                                        r_t = f"{closest_5} mins"
+                                                    else:
+                                                        r_t = "45 mins"
+                                                
+                                                try: r_f = float(r_up[c_fee]) if (c_fee and pd.notna(r_up[c_fee])) else 25.0
+                                                except: r_f = 25.0
+                                                r_f = min(max(r_f, 0.0), 35.0)
+                                                
+                                                try: r_m = float(r_up[c_min]) if (c_min and pd.notna(r_up[c_min])) else 0.0
+                                                except: r_m = 0.0
+                                                r_m = max(r_m, 0.0)
+                                                
+                                                # إزالة المنطقة من أي فرع آخر في السلسلة لو مضافة هناك
+                                                for other_v in working_alloc:
+                                                    if other_v != target_row_vid and matched_zone in working_alloc[other_v]:
+                                                        del working_alloc[other_v][matched_zone]
+                                                        
+                                                if target_row_vid not in working_alloc:
+                                                    working_alloc[target_row_vid] = {}
+                                                    
+                                                working_alloc[target_row_vid][matched_zone] = {
+                                                    "time": r_t,
+                                                    "fee": r_f,
+                                                    "min_order": r_m
+                                                }
+                                                imported_count += 1
+                                        
+                                        st.session_state["portal_working_alloc"] = working_alloc
+                                        st.session_state["portal_show_diff"] = True
+                                        st.success(T(
+                                            f"🎉 تم استيراد وتحديث {imported_count} منطقة بنجاح على الخريطة! انزل لأسفل لمراجعة جدول التعديلات وتأكيدها ⬇️",
+                                            f"🎉 Imported & updated {imported_count} zones! Scroll down to review and submit ⬇️"
+                                        ))
+                                        st.rerun()
+                            except Exception as e:
+                                st.error(f"خطأ أثناء قراءة الملف: {e}")
+
+                st.markdown("---")
+
                 opt_edit = T("✏️ تعديل الوقت والرسوم لمناطق حالية", "✏️ Edit Time & Fees")
                 opt_add = T("➕ إضافة منطقة لهذا الفرع", "➕ Add Zone to Branch")
                 opt_del = T("🗑️ إزالة منطقة من هذا الفرع", "🗑️ Remove Zone from Branch")
@@ -2102,7 +2211,7 @@ with tab2:
                         st.session_state["portal_add_zone_select"] = just_clicked
 
                 action_mode = st.radio(
-                    T("اختر نوع التعديل:", "Select Action:"),
+                    T("أو اختر تعديلاً يدوياً:", "Or Select Manual Action:"),
                     options=[opt_edit, opt_add, opt_del],
                     key="portal_action_mode_radio"
                 )
@@ -2435,6 +2544,7 @@ with tab2:
 
                                     saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
                                     
+                                    # إرسال الإيميل بصمت بدون رسالة زرقاء للفيندور
                                     send_request_emails(
                                         vendor_id=v_id, 
                                         vendor_name=b_vname, 
