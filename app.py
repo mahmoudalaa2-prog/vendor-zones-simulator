@@ -20,6 +20,10 @@ from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
 
+# مكتبات فايربيز الرسمية
+import firebase_admin
+from firebase_admin import credentials, firestore
+
 # ==========================================
 # 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
 # ==========================================
@@ -100,70 +104,51 @@ BRANCH_PALETTE = [
 DELIVERY_TIME_CHOICES = ["20 mins", "25 mins", "30 mins", "35 mins", "40 mins", "45 mins", "50 mins", "55 mins", "60 mins"]
 
 # ==========================================
-# 2. إدارة المستخدمين وقاعدة البيانات السحابية الحية (Google Sheets Cloud DB)
+# 2. إدارة الاتصال بـ Firebase Firestore
 # ==========================================
 USERS_FILE = "users.csv"
 REQUESTS_FILE = "vendor_pricing_requests.csv"
 SMTP_CONFIG_FILE = "smtp_config.json"
 MASTER_ADMIN_EMAIL = "mahmoud.alaa.2@talabat.com"
 
-CLOUD_DB_URL = "https://script.google.com/macros/s/AKfycbxeqazFLMccOtIG6hNrupdWNES8yneeD20kbiwAR7K2t4EXNwpRDu85twE3ewjlFVspXQ/exec"
-
 REQUESTS_COLUMNS = [
     "Date", "Vendor ID", "Vendor Name", "Zone", "Classification", 
     "Action", "Distance (km)", "Delivery Time", "Delivery Fees", "Minimum Order Amount", "Final_Status", "Status"
 ]
 
-def cloud_post(payload):
-    if not CLOUD_DB_URL:
-        return False, "رابط قاعدة البيانات السحابية غير معرف"
+@st.cache_resource
+def get_db():
+    if not firebase_admin._apps:
+        try:
+            if "firebase" in st.secrets:
+                key_dict = dict(st.secrets["firebase"])
+                if "private_key" in key_dict:
+                    key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+                cred = credentials.Certificate(key_dict)
+                firebase_admin.initialize_app(cred)
+            elif os.path.exists("firebase_key.json"):
+                cred = credentials.Certificate("firebase_key.json")
+                firebase_admin.initialize_app(cred)
+        except Exception as e:
+            st.error(f"⚠️ فشل الاتصال بقاعدة بيانات Firebase: {e}")
+            return None
     try:
-        res = requests.post(CLOUD_DB_URL, json=payload, timeout=25, allow_redirects=True)
-        if "ServiceLogin" in res.url or "accounts.google.com" in res.url:
-            return False, "جوجل يرفض الاتصال ويطلب تسجيل الدخول. يرجى ضبط Who has access على Anyone"
-            
-        if res.status_code in [200, 302]:
-            return True, "تم الحفظ سحابياً بنجاح"
-        return False, f"استجاب سيرفر جوجل بكود: {res.status_code}"
-    except requests.exceptions.Timeout:
-        return False, "انتهت مهلة انتظار سيرفر جوجل سكريبت (Timeout). يرجى المحاولة مرة أخرى."
-    except Exception as e:
-        return False, f"خطأ اتصال: {e}"
-
-def cloud_get(action):
-    if not CLOUD_DB_URL:
-        return []
-    try:
-        res = requests.get(f"{CLOUD_DB_URL}?action={action}", timeout=25)
-        if res.status_code == 200:
-            try:
-                data = res.json()
-                if isinstance(data, list):
-                    return data
-            except Exception:
-                pass
+        return firestore.client()
     except Exception:
-        pass
-    return []
+        return None
 
-def test_cloud_db_connection():
-    if not CLOUD_DB_URL:
-        return False, "رابط قاعدة البيانات السحابية غير معرف"
+db = get_db()
+
+def test_firebase_connection():
+    if db is None:
+        return False, "الاتصال غير مهيأ. تأكد من ضبط إعدادات [firebase] في Streamlit Secrets."
     try:
-        res = requests.get(f"{CLOUD_DB_URL}?action=get_users", timeout=25)
-        if res.status_code == 200:
-            try:
-                data = res.json()
-                if isinstance(data, list):
-                    return True, "الاتصال بقاعدة بيانات Google Sheets يعمل بنجاح تام! السيرفر يقرأ ويكتب بدون مشاكل."
-            except Exception:
-                if "accounts.google.com" in res.text:
-                    return False, "تنبيه: يتطلب جوجل سكريبت تسجيل الدخول. يرجى ضبط إعداد Who has access على Anyone"
-        return False, f"استجاب السيرفر بكود: {res.status_code}"
-    except requests.exceptions.Timeout:
-        return False, "انتهت مهلة الانتظار (Timeout)"
+        # اختبار قراءة وكتابة خفيف للتأكد من الصلاحية
+        test_ref = db.collection("_ping").document("test")
+        test_ref.set({"timestamp": firestore.SERVER_TIMESTAMP})
+        return True, "الاتصال بـ Firebase Firestore يعمل بنجاح فائق! القراءة والكتابة نشطة بنسبة 100%."
     except Exception as e:
-        return False, f"خطأ اتصال: {e}"
+        return False, f"فشل الاتصال بـ Firebase: {e}"
 
 def load_smtp_config():
     cfg = {
@@ -239,37 +224,45 @@ def init_users_db():
         }]).to_csv(USERS_FILE, index=False)
 
 def get_users_df():
-    init_users_db()
     required_cols = ["email", "password", "role", "access_type", "access_ids"]
-    cloud_records = cloud_get("get_users")
-    if cloud_records and isinstance(cloud_records, list):
-        df_cloud = pd.DataFrame(cloud_records)
-        for c in required_cols:
-            if c not in df_cloud.columns:
-                df_cloud[c] = ""
-        
-        has_admin = (df_cloud["email"].astype(str).str.lower() == MASTER_ADMIN_EMAIL.lower()).any()
-        if not has_admin:
-            admin_row = {
-                "email": MASTER_ADMIN_EMAIL,
-                "password": "123456",
-                "role": "admin",
-                "access_type": "all",
-                "access_ids": "all"
-            }
-            cloud_post({"action": "add_user", "user": admin_row})
-            df_cloud = pd.concat([pd.DataFrame([admin_row]), df_cloud], ignore_index=True)
-            
+    if db is not None:
         try:
-            df_cloud[required_cols].to_csv(USERS_FILE, index=False)
+            docs = db.collection("users").stream()
+            records = [d.to_dict() for d in docs]
+            if records:
+                df = pd.DataFrame(records)
+                for c in required_cols:
+                    if c not in df.columns: df[c] = ""
+                has_admin = (df["email"].astype(str).str.lower() == MASTER_ADMIN_EMAIL.lower()).any()
+                if not has_admin:
+                    admin_row = {
+                        "email": MASTER_ADMIN_EMAIL,
+                        "password": "123456",
+                        "role": "admin",
+                        "access_type": "all",
+                        "access_ids": "all"
+                    }
+                    db.collection("users").document(MASTER_ADMIN_EMAIL.lower()).set(admin_row)
+                    df = pd.concat([pd.DataFrame([admin_row]), df], ignore_index=True)
+                return df[required_cols]
+            else:
+                # إذا كانت قاعدة البيانات فارغة، نضيف حساب الأدمن تلقائياً
+                admin_row = {
+                    "email": MASTER_ADMIN_EMAIL,
+                    "password": "123456",
+                    "role": "admin",
+                    "access_type": "all",
+                    "access_ids": "all"
+                }
+                db.collection("users").document(MASTER_ADMIN_EMAIL.lower()).set(admin_row)
+                return pd.DataFrame([admin_row])[required_cols]
         except Exception: pass
-        return df_cloud[required_cols]
 
+    init_users_db()
     try:
         df_local = pd.read_csv(USERS_FILE)
         for c in required_cols:
-            if c not in df_local.columns:
-                df_local[c] = ""
+            if c not in df_local.columns: df_local[c] = ""
         return df_local[required_cols]
     except Exception:
         return pd.DataFrame([{
@@ -289,11 +282,7 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
     if not check_is_master_admin(current_user_dict):
         return False, T("⛔ عذراً، إضافة وتعديل المستخدمين مقتصر حصرياً على الأدمن الرئيسي!", "⛔ Unauthorized: Only Master Admin can add or edit users!")
         
-    df = get_users_df()
     email_clean = email.strip().lower()
-    if email_clean in df["email"].str.lower().values:
-        return False, T("هذا البريد مسجل بالفعل!", "This email already exists!")
-        
     user_dict = {
         "email": email_clean,
         "password": str(password).strip(),
@@ -301,79 +290,85 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
         "access_type": access_type,
         "access_ids": str(access_ids)
     }
-    
-    ok_cloud, msg_cloud = cloud_post({"action": "add_user", "user": user_dict})
-    
+
+    if db is not None:
+        try:
+            doc_ref = db.collection("users").document(email_clean)
+            if doc_ref.get().exists:
+                return False, T("هذا البريد مسجل بالفعل في قاعدة البيانات!", "Email already registered!")
+            doc_ref.set(user_dict)
+            return True, T("تم إنشاء الحساب وحفظه في Firebase بنجاح فائق!", "User saved directly to Firebase!")
+        except Exception as e:
+            return False, f"خطأ Firebase: {e}"
+
+    df = get_users_df()
+    if email_clean in df["email"].str.lower().values:
+        return False, T("هذا البريد مسجل بالفعل!", "This email already exists!")
     new_user = pd.DataFrame([user_dict])
     df = pd.concat([df, new_user], ignore_index=True)
-    try:
-        df.to_csv(USERS_FILE, index=False)
+    try: df.to_csv(USERS_FILE, index=False)
     except Exception: pass
-    
-    if ok_cloud:
-        return True, T("تم إنشاء الحساب وحفظه في Google Sheets سحابياً بنجاح!", "User created and synced to Google Sheets!")
-    else:
-        return False, T(f"تم إنشاء الحساب محلياً ولكن فشل الحفظ السحابي: {msg_cloud}", f"Created locally but cloud sync failed: {msg_cloud}")
+    return True, T("تم حفظ الحساب محلياً.", "Saved locally.")
 
 def update_user_permissions(email, role, access_type, access_ids, new_password=None, current_user_dict=None):
     if not check_is_master_admin(current_user_dict):
         return False, T("⛔ عذراً، تعديل الصلاحيات مقتصر حصرياً على الأدمن الرئيسي!", "⛔ Unauthorized: Only Master Admin can edit permissions!"), None
         
-    df = get_users_df()
     email_clean = email.strip().lower()
+    final_role = "admin" if email_clean == MASTER_ADMIN_EMAIL.lower() else role
+    final_acc_type = "all" if email_clean == MASTER_ADMIN_EMAIL.lower() else access_type
+    final_acc_ids = "all" if email_clean == MASTER_ADMIN_EMAIL.lower() else str(access_ids)
+    
+    update_data = {
+        "email": email_clean,
+        "role": final_role,
+        "access_type": final_acc_type,
+        "access_ids": final_acc_ids
+    }
+    if new_password and str(new_password).strip():
+        update_data["password"] = str(new_password).strip()
+
+    if db is not None:
+        try:
+            doc_ref = db.collection("users").document(email_clean)
+            doc_ref.set(update_data, merge=True)
+            res_dict = doc_ref.get().to_dict()
+            return True, T("تم تحديث البيانات وكلمة المرور في Firebase فوراً!", "User updated in Firebase!"), res_dict
+        except Exception as e:
+            return False, f"خطأ Firebase: {e}", None
+
+    df = get_users_df()
     idx = df[df["email"].str.lower() == email_clean].index
     if not idx.empty:
-        final_role = "admin" if email_clean == MASTER_ADMIN_EMAIL.lower() else role
-        final_acc_type = "all" if email_clean == MASTER_ADMIN_EMAIL.lower() else access_type
-        final_acc_ids = "all" if email_clean == MASTER_ADMIN_EMAIL.lower() else str(access_ids)
-        final_pwd = str(new_password).strip() if (new_password and str(new_password).strip()) else ""
-
         df.loc[idx, "role"] = final_role
         df.loc[idx, "access_type"] = final_acc_type
         df.loc[idx, "access_ids"] = final_acc_ids
-        if final_pwd:
-            df.loc[idx, "password"] = final_pwd
-
-        cloud_payload = {
-            "action": "update_user",
-            "email": email_clean,
-            "role": final_role,
-            "access_type": final_acc_type,
-            "access_ids": final_acc_ids,
-            "password": final_pwd
-        }
-        ok_cloud, msg_cloud = cloud_post(cloud_payload)
-
-        try:
-            df.to_csv(USERS_FILE, index=False)
+        if new_password and str(new_password).strip():
+            df.loc[idx, "password"] = str(new_password).strip()
+        try: df.to_csv(USERS_FILE, index=False)
         except Exception: pass
-        
-        if ok_cloud:
-            return True, T("تم تحديث البيانات وكلمة المرور ومزامنتها سحابياً!", "User updated and synced to cloud!"), df.iloc[idx[0]].to_dict()
-        else:
-            return False, T(f"خطأ سحابي: {msg_cloud}", f"Cloud Error: {msg_cloud}"), None
+        return True, T("تم تحديث البيانات محلياً!", "Updated locally!"), df.iloc[idx[0]].to_dict()
     return False, T("المستخدم غير موجود.", "User not found."), None
 
 def delete_user(email, current_user_dict=None):
     if not check_is_master_admin(current_user_dict):
         return False, T("⛔ عذراً، حذف الحسابات مقتصر حصرياً على الأدمن الرئيسي!", "⛔ Unauthorized: Only Master Admin can delete users!")
-        
-    df = get_users_df()
     if email.strip().lower() == MASTER_ADMIN_EMAIL.lower():
         return False, T("لا يمكن حذف الأدمن الرئيسي!", "Cannot delete master admin!")
         
     email_clean = email.strip().lower()
-    ok_cloud, msg_cloud = cloud_post({"action": "delete_user", "email": email_clean})
-    
+    if db is not None:
+        try:
+            db.collection("users").document(email_clean).delete()
+            return True, T("تم حذف الحساب من Firebase بنجاح!", "User deleted from Firebase successfully!")
+        except Exception as e:
+            return False, f"خطأ Firebase: {e}"
+
+    df = get_users_df()
     df = df[df["email"].str.lower() != email_clean]
-    try:
-        df.to_csv(USERS_FILE, index=False)
+    try: df.to_csv(USERS_FILE, index=False)
     except Exception: pass
-    
-    if ok_cloud:
-        return True, T("تم حذف الحساب من السحابة بنجاح!", "User deleted from cloud successfully!")
-    else:
-        return False, T(f"خطأ في الحذف السحابي: {msg_cloud}", f"Cloud deletion error: {msg_cloud}")
+    return True, T("تم حذف الحساب محلياً!", "User deleted locally!")
 
 # ==========================================
 # 3. دوال المعالجة والمطابقة الذكية للمناطق
@@ -602,9 +597,9 @@ def load_data():
         df_p["fault_cr"] = df_p[col_fault_cr] if col_fault_cr else "-"
 
     if not df_d.empty and not df_v.empty:
-        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id", "Vendor Attributes Vendor Id", "Vendor Code", "Store ID", "Branch ID"])
-        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id", "Chain Attributes Chain ID"])
-        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone", "Zone Name"])
+        d_vid_col = robust_get_col(df_d, ["Vendor ID", "Vendor Id", "VendorID", "vendor_id"])
+        d_cid_col = robust_get_col(df_d, ["Chain ID", "Chain Id", "ChainID", "chain_id"])
+        d_zone_col = robust_get_col(df_d, ["Area Name", "Delivery Area Name", "Zone", "Delivery Location Area Name", "Area", "Delivery Zone"])
         d_time_col = robust_get_col(df_d, ["Delivery Time", "Time", "Duration"])
         d_fee_col = robust_get_col(df_d, ["Delivery Fees", "Fee", "Delivery Fee", "Price"])
         d_min_col = robust_get_col(df_d, ["Minimum Amount", "Minimum Order", "Min Order", "Min Amount", "الحد الادنى", "الحد الأدنى"])
@@ -627,8 +622,7 @@ def load_data():
             for idx, wkt_str in df_a["cleaned_wkt"].items():
                 if pd.notnull(wkt_str):
                     try:
-                        geom = wkt.loads(wkt_str)
-                        geometries.append(geom)
+                        geometries.append(wkt.loads(wkt_str))
                         valid_indices.append(idx)
                     except Exception: pass
                         
@@ -738,18 +732,13 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                     c_perf = c_match.iloc[0].to_dict()
     return v_perf, c_perf
 
-# نظام حفظ الطلبات المزدوج المربوط سحابياً مع Google Sheets
-def init_requests_db():
-    if not os.path.exists(REQUESTS_FILE):
-        pd.DataFrame(columns=REQUESTS_COLUMNS).to_csv(REQUESTS_FILE, index=False)
-    if "session_requests_list" not in st.session_state:
-        st.session_state["session_requests_list"] = []
-
+# ==========================================
+# نظام حفظ واسترجاع الطلبات عبر Firestore
+# ==========================================
 def save_detailed_request(vendor_id, vendor_name, edited_df):
-    init_requests_db()
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     new_records = []
+    
     for _, r in edited_df.iterrows():
         z_name = str(r.get("Zone", "")).strip()
         classification = str(r.get("Classification", "Vendor Zone Update")).strip()
@@ -760,15 +749,10 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
             dist_val = calc_vendor_zone_distance(vendor_id, z_name, df_vendors, gdf_areas)
             
         d_time = str(r.get("Delivery Time", "45 mins")).strip()
-        fee_val = r.get("Delivery Fees") or r.get("Delivery Fees (EGP)") or r.get("Fees") or 25.0
-        try: fee_val = float(fee_val)
+        try: fee_val = float(r.get("Delivery Fees") or 25.0)
         except: fee_val = 25.0
-
-        min_val = r.get("Minimum Order Amount") or r.get("Minimum Amount") or r.get("Minimum Order (EGP)") or 0.0
-        try: min_val = float(min_val)
+        try: min_val = float(r.get("Minimum Order Amount") or 0.0)
         except: min_val = 0.0
-        
-        final_status = str(r.get("Final_Status", "Active (Existing)")).strip()
         
         row_dict = {
             "Date": date_str,
@@ -781,23 +765,58 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
             "Delivery Time": d_time,
             "Delivery Fees": fee_val,
             "Minimum Order Amount": min_val,
-            "Final_Status": final_status,
+            "Final_Status": str(r.get("Final_Status", "Active (Existing)")).strip(),
             "Status": "Pending"
         }
         new_records.append(row_dict)
-        
+
+    if db is not None:
+        try:
+            batch = db.batch()
+            coll = db.collection("pricing_requests")
+            for rec in new_records:
+                doc_ref = coll.document()
+                batch.set(doc_ref, rec)
+            batch.commit()
+        except Exception: pass
+
+    # حفظ نسخة احتياطية في ذاكرة الجلسة والملف المحلي
     if "session_requests_list" not in st.session_state:
         st.session_state["session_requests_list"] = []
     st.session_state["session_requests_list"].extend(new_records)
-
+    
     try:
         save_df = pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
         save_df.to_csv(REQUESTS_FILE, mode="a", header=False, index=False)
     except Exception: pass
 
-    cloud_post({"action": "save_requests", "records": new_records})
-
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
+
+def get_all_requests_df():
+    if db is not None:
+        try:
+            docs = db.collection("pricing_requests").stream()
+            records = [d.to_dict() for d in docs]
+            if records:
+                df = pd.DataFrame(records)
+                for c in REQUESTS_COLUMNS:
+                    if c not in df.columns: df[c] = ""
+                return df[REQUESTS_COLUMNS].sort_values(by="Date", ascending=False)
+        except Exception: pass
+
+    file_records = []
+    if os.path.exists(REQUESTS_FILE):
+        try:
+            fdf = pd.read_csv(REQUESTS_FILE, on_bad_lines='skip')
+            if not fdf.empty and "Zone" in fdf.columns:
+                file_records = fdf.to_dict('records')
+        except Exception: pass
+
+    mem_records = st.session_state.get("session_requests_list", [])
+    all_recs = file_records + mem_records
+    if not all_recs:
+        return pd.DataFrame(columns=REQUESTS_COLUMNS)
+    return pd.DataFrame(all_recs, columns=REQUESTS_COLUMNS)
 
 def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
     smtp_cfg = load_smtp_config()
@@ -808,7 +827,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
     admin_recipient = smtp_cfg.get("admin_email", MASTER_ADMIN_EMAIL)
 
     if not sender_email or not sender_password:
-        return False, "⚠️ تم حفظ الطلب، ولكن لم يتم إرسال الإيميل لعدم ضبط بيانات الراسل (SMTP Sender) في إعدادات البريد بتبويب Users & Access."
+        return False, "⚠️ تم حفظ الطلب، ولكن لم يتم إرسال الإيميل لعدم ضبط بيانات الراسل."
 
     try:
         date_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
@@ -829,7 +848,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         if smtp_port == 465:
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=12)
         else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=12)
+            server = smtplib.SMTP(server_host, smtp_port, timeout=12)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -989,41 +1008,6 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
     except Exception as e:
         return False, f"فشل الإرسال: {e}"
 
-def get_all_requests_df():
-    init_requests_db()
-    cloud_records = cloud_get("get_requests")
-    if not isinstance(cloud_records, list):
-        cloud_records = []
-    
-    file_records = []
-    if os.path.exists(REQUESTS_FILE):
-        try:
-            fdf = pd.read_csv(REQUESTS_FILE, on_bad_lines='skip')
-            if not fdf.empty and "Zone" in fdf.columns:
-                file_records = fdf.to_dict('records')
-        except Exception: pass
-
-    mem_records = st.session_state.get("session_requests_list", [])
-    if not isinstance(mem_records, list):
-        mem_records = []
-    
-    all_recs = []
-    seen = set()
-    for rec in (cloud_records + file_records + mem_records):
-        rec_key = (str(rec.get("Date", "")), str(rec.get("Vendor ID", "")), str(rec.get("Zone", "")))
-        if rec_key not in seen and str(rec.get("Zone", "")).strip() != "":
-            seen.add(rec_key)
-            all_recs.append(rec)
-            
-    if not all_recs:
-        return pd.DataFrame(columns=REQUESTS_COLUMNS)
-        
-    res_df = pd.DataFrame(all_recs, columns=REQUESTS_COLUMNS)
-    try:
-        res_df.to_csv(REQUESTS_FILE, index=False)
-    except Exception: pass
-    return res_df
-
 def build_zone_popup_card(area_name, info_list):
     if not info_list:
         return (
@@ -1138,9 +1122,6 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
 # ==========================================
 # 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
 # ==========================================
-init_users_db()
-init_requests_db()
-
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["current_user"] = None
@@ -1297,8 +1278,8 @@ with st.sidebar:
         st.write(f"📌 **{T('نطاق الربط', 'Scope')}:** `{current_user['access_type']}`")
     
     st.markdown("""
-    <div style="background: rgba(40, 167, 69, 0.15); border: 1px solid #28a745; padding: 4px 8px; border-radius: 6px; font-size: 11px; color: #28a745; font-weight: bold; text-align: center; margin: 8px 0;">
-        🟢 Google Sheet Cloud DB Live
+    <div style="background: rgba(255, 90, 0, 0.15); border: 1px solid #ff5a00; padding: 4px 8px; border-radius: 6px; font-size: 11px; color: #ff5a00; font-weight: bold; text-align: center; margin: 8px 0;">
+        ⚡ Firebase Firestore Live Cloud
     </div>
     """, unsafe_allow_html=True)
     st.markdown("---")
@@ -1679,7 +1660,7 @@ if is_admin:
                 st.warning(f"ملاحظة: تعذر عرض بعض عناصر الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع خاصية رفع الملف والتعامل الذكي مع السلسلة والفرع)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1834,9 +1815,6 @@ with tab2:
             active_branch_color = branch_color_map.get(active_vid, {}).get("hex", "#28a745")
             active_branch_name = branch_names.get(active_vid, active_vid)
 
-            # ========================================================
-            # عرض بطاقات أداء السلسلة وأداء الفرع تحت بعض
-            # ========================================================
             st.markdown("---")
             v_perf, c_perf = get_vendor_and_chain_perf(active_vid, found_cid, df_performance)
 
@@ -2161,7 +2139,6 @@ with tab2:
                                                 except: r_m = 0.0
                                                 r_m = max(r_m, 0.0)
                                                 
-                                                # إزالة المنطقة من أي فرع آخر في السلسلة لو مضافة هناك
                                                 for other_v in working_alloc:
                                                     if other_v != target_row_vid and matched_zone in working_alloc[other_v]:
                                                         del working_alloc[other_v][matched_zone]
@@ -2544,7 +2521,6 @@ with tab2:
 
                                     saved_records_df = save_detailed_request(v_id, b_vname, b_sub_df)
                                     
-                                    # إرسال الإيميل بصمت بدون رسالة زرقاء للفيندور
                                     send_request_emails(
                                         vendor_id=v_id, 
                                         vendor_name=b_vname, 
@@ -2589,8 +2565,6 @@ with tab2:
 if is_admin:
     with tab3:
         st.header(T("📥 طلبات التسعير والتغطية الواردة من الفروع", "📥 Pricing & Coverage Requests"), anchor="pricing-requests")
-        init_requests_db()
-        
         raw_df = get_all_requests_df()
         has_requests = not raw_df.empty and "Zone" in raw_df.columns
 
@@ -2702,7 +2676,6 @@ if is_admin:
                         st.session_state["session_requests_list"] = []
                         if os.path.exists(REQUESTS_FILE):
                             os.remove(REQUESTS_FILE)
-                        init_requests_db()
                         st.rerun()
 
                 if show_details and not selected_rows.empty:
@@ -2746,7 +2719,7 @@ if is_master_admin:
             T("➕ إضافة مستخدم جديد", "➕ Add New User"),
             T("✏️ تعديل صلاحيات وكلمة مرور مستخدم", "✏️ Edit Permissions & Password"),
             T("📋 قائمة المستخدمين", "📋 Users List"),
-            T("📧 إعدادات البريد والسحابة (Cloud & SMTP Settings)", "📧 Cloud & SMTP Settings")
+            T("⚡ إعدادات واختبار Firebase و SMTP", "⚡ Firebase & SMTP Settings")
         ])
         
         with tab_u1:
@@ -2815,7 +2788,7 @@ if is_master_admin:
                 elif ("Chain" in access_choice or "Vendor" in access_choice) and not selected_access_ids_str.strip():
                     st.error(T("يرجى اختيار سلسلة أو فرع واحد على الأقل من القائمة."))
                 else:
-                    with st.spinner(T("جارٍ إنشاء الحساب ومزامنته سحابياً مع Google Sheets...", "Creating and syncing user to cloud...")):
+                    with st.spinner(T("جارٍ إنشاء الحساب وحفظه في Firebase...", "Creating and saving user to Firebase...")):
                         ok, msg = add_user(new_email, new_password, u_role, access_type, selected_access_ids_str, current_user_dict=current_user)
                         st.session_state["user_created_alert"] = ("success" if ok else "error", msg)
                         st.rerun()
@@ -2895,7 +2868,7 @@ if is_master_admin:
 
             st.write("")
             if st.button(T("💾 حفظ التعديلات وتحديث الصلاحيات", "💾 Save Changes & Permissions"), type="primary", use_container_width=True, key="btn_edit_user_submit"):
-                with st.spinner(T("جارٍ تحديث البيانات ومزامنتها سحابياً...", "Updating user in cloud...")):
+                with st.spinner(T("جارٍ تحديث البيانات في Firebase...", "Updating user in Firebase...")):
                     ok, msg, updated_row = update_user_permissions(
                         selected_edit_user, 
                         e_role, 
@@ -2924,7 +2897,7 @@ if is_master_admin:
                 st.markdown("---")
                 to_del = st.selectbox(T("اختر المستخدم للحذف:", "Select User to Delete:"), deletable, key="delete_user_select")
                 if st.button(T("حذف الحساب نهائياً", "Delete User"), type="secondary", key="btn_delete_user"):
-                    with st.spinner(T("جارٍ حذف الحساب من السحابة...", "Deleting from cloud...")):
+                    with st.spinner(T("جارٍ حذف الحساب من Firebase...", "Deleting from Firebase...")):
                         ok, msg = delete_user(to_del, current_user_dict=current_user)
                         if ok:
                             st.success(msg)
@@ -2933,12 +2906,11 @@ if is_master_admin:
                             st.error(msg)
 
         with tab_u4:
-            st.subheader(T("☁️ فحص اتصال قاعدة البيانات السحابية (Google Sheet Live Sync Test)", "☁️ Google Sheet Live Sync Test"))
-            st.caption(f"الرابط السحابي المتصل حالياً: `{CLOUD_DB_URL[:60]}...`")
+            st.subheader(T("⚡ فحص اتصال Firebase Firestore", "⚡ Test Firebase Firestore Connection"))
             
-            if st.button(T("🧪 اختبار الاتصال بجوجل شيت الآن (Test Cloud DB Connection)", "🧪 Test Cloud DB Connection"), type="primary", use_container_width=True, key="btn_test_clouddb"):
-                with st.spinner(T("جارٍ إرسال فحص تجريبي لسيرفر Google Apps Script...", "Testing connection to Google Apps Script...")):
-                    ok_db, msg_db = test_cloud_db_connection()
+            if st.button(T("🧪 اختبار الاتصال بـ Firebase الآن", "🧪 Test Firebase Connection Now"), type="primary", use_container_width=True, key="btn_test_firebase"):
+                with st.spinner(T("جارٍ اختبار الاتصال المباشر بـ Firestore...", "Testing connection to Firebase...")):
+                    ok_db, msg_db = test_firebase_connection()
                     if ok_db:
                         st.success(f"✅ {msg_db}")
                     else:
