@@ -5,3 +5,4 @@ geopandas
 shapely
 folium
 streamlit-folium
+firebase-admin
