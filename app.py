@@ -20,7 +20,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
 
-# مكتبات فايربيز الرسمية
+# مكتبات Firebase الرسمية
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -143,7 +143,6 @@ def test_firebase_connection():
     if db is None:
         return False, "الاتصال غير مهيأ. تأكد من ضبط إعدادات [firebase] في Streamlit Secrets."
     try:
-        # اختبار قراءة وكتابة خفيف للتأكد من الصلاحية
         test_ref = db.collection("_ping").document("test")
         test_ref.set({"timestamp": firestore.SERVER_TIMESTAMP})
         return True, "الاتصال بـ Firebase Firestore يعمل بنجاح فائق! القراءة والكتابة نشطة بنسبة 100%."
@@ -246,7 +245,6 @@ def get_users_df():
                     df = pd.concat([pd.DataFrame([admin_row]), df], ignore_index=True)
                 return df[required_cols]
             else:
-                # إذا كانت قاعدة البيانات فارغة، نضيف حساب الأدمن تلقائياً
                 admin_row = {
                     "email": MASTER_ADMIN_EMAIL,
                     "password": "123456",
@@ -371,7 +369,7 @@ def delete_user(email, current_user_dict=None):
     return True, T("تم حذف الحساب محلياً!", "User deleted locally!")
 
 # ==========================================
-# 3. دوال المعالجة والمطابقة الذكية للمناطق
+# 3. دوال المعالجة والمسافات
 # ==========================================
 def normalize_id(val):
     if pd.isna(val): return ""
@@ -502,9 +500,9 @@ def read_google_sheet_csv(url):
     except Exception: return pd.DataFrame()
 
 # ==========================================
-# 4. جلب وتجهيز البيانات
+# 4. جلب وتجهيز البيانات مع كاش 24 ساعة للسرعة الفائقة
 # ==========================================
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=86400)
 def load_data():
     url_vendors = "https://docs.google.com/spreadsheets/d/12SSMW20Two2hRpHOuIXXifweJI82bZpJClhUAWSuYHk/export?format=csv&gid=0"
     url_areas = "https://docs.google.com/spreadsheets/d/1Y3AlqaHjp4nZup6QwOBgl6CT5z3XHjfzpRSx5Yw5byk/export?format=csv&gid=0"
@@ -780,7 +778,6 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
             batch.commit()
         except Exception: pass
 
-    # حفظ نسخة احتياطية في ذاكرة الجلسة والملف المحلي
     if "session_requests_list" not in st.session_state:
         st.session_state["session_requests_list"] = []
     st.session_state["session_requests_list"].extend(new_records)
@@ -848,7 +845,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         if smtp_port == 465:
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=12)
         else:
-            server = smtplib.SMTP(server_host, smtp_port, timeout=12)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=12)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -1122,6 +1119,8 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
 # ==========================================
 # 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
 # ==========================================
+init_users_db()
+
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["current_user"] = None
