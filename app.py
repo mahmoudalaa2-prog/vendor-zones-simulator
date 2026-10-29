@@ -1927,15 +1927,28 @@ with tab2:
 
                 # ضبط مركز الخريطة ومستوى الزوم الواسع (11) كالصورة الثانية بدلاً من 14
                 active_row = vd[vd["clean_vid"] == active_vid]
-                if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
+                
+                # حساب النطاق المشترك للفرع ومناطقه لتوسيطهما معاً في قلب الشاشة
+                active_z_names = set(k.strip().lower() for k in working_alloc.get(active_vid, {}).keys())
+                branch_zones_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(active_z_names)] if not gdf_areas.empty else gpd.GeoDataFrame()
+
+                if not branch_zones_gdf.empty:
+                    minx, miny, maxx, maxy = branch_zones_gdf.total_bounds
+                    if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]):
+                        v_lat, v_lng = float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])
+                        minx, maxx = min(minx, v_lng), max(maxx, v_lng)
+                        miny, maxy = min(miny, v_lat), max(maxy, v_lat)
+                    mcnt = [(miny + maxy) / 2.0, (minx + maxx) / 2.0]
+                    zoom_lvl = 12
+                elif not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
                     mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
-                    zoom_lvl = 13  # زوم واسع وشامل
+                    zoom_lvl = 12
                 elif not valid_coords.empty:
                     mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
-                    zoom_lvl = 13
+                    zoom_lvl = 12
                 else:
                     mcnt = [30.0444, 31.2357]
-                    zoom_lvl = 13
+                    zoom_lvl = 11
 
                 vmap = folium.Map(location=mcnt, zoom_start=zoom_lvl, prefer_canvas=True)
 
