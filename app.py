@@ -1929,7 +1929,7 @@ with tab2:
                 active_row = vd[vd["clean_vid"] == active_vid]
                 if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
                     mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
-                    zoom_lvl = 11  # زوم واسع وشامل
+                    zoom_lvl = 13  # زوم واسع وشامل
                 elif not valid_coords.empty:
                     mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
                     zoom_lvl = 11
