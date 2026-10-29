@@ -983,11 +983,13 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             </body>
             </html>
             """
+
             msg_vendor = MIMEMultipart()
             msg_vendor['Subject'] = vendor_subject
             msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
             msg_vendor['To'] = submitted_by_email
             msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
+
             part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             part_vendor.set_payload(excel_bytes)
             encoders.encode_base64(part_vendor)
@@ -1333,7 +1335,7 @@ if is_admin:
         
         if not map_active:
             st.info(T(
-                "⏸️ خريطة المراقبة العامة معطلة لتوفير أقصى سرعة لبوابة الفيندورز. فَعِّل المفتاح أعلاه عند الحاجة لاستعراض التغطية العامة.",
+                "⏸️ خريطة المراقبة العامة معطلة لتوفير أقصى سرعة لبوابة الفيندورز. فَعِّل المفتاح أعلاه عند الحاجة لاستعراض التغطية العامة.",
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
@@ -1798,8 +1800,6 @@ with tab2:
                 st.session_state["portal_show_diff"] = False
                 st.session_state["portal_selected_zone"] = ""
                 st.session_state["just_clicked_map_zone"] = None
-                st.session_state.pop("portal_map_center", None)
-                st.session_state.pop("portal_map_zoom", None)
 
             working_alloc = st.session_state.get("portal_working_alloc", {})
             orig_alloc = st.session_state.get("portal_orig_alloc", {})
@@ -1925,23 +1925,17 @@ with tab2:
                 st.subheader(f"🗺️ Map ({len([z for v in working_alloc.values() for z in v])} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
 
-                saved_center = st.session_state.get("portal_map_center")
-                saved_zoom = st.session_state.get("portal_map_zoom")
-
-                if saved_center and saved_zoom:
-                    mcnt = saved_center
-                    zoom_lvl = saved_zoom
+                # ضبط مركز الخريطة ومستوى الزوم الواسع (11) كالصورة الثانية بدلاً من 14
+                active_row = vd[vd["clean_vid"] == active_vid]
+                if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
+                    mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
+                    zoom_lvl = 11  # زوم واسع وشامل
+                elif not valid_coords.empty:
+                    mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
+                    zoom_lvl = 11
                 else:
-                    active_row = vd[vd["clean_vid"] == active_vid]
-                    if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
-                        mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
-                        zoom_lvl = 11  # زوم واسع مريح
-                    elif not valid_coords.empty:
-                        mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
-                        zoom_lvl = 11
-                    else:
-                        mcnt = [30.0444, 31.2357]
-                        zoom_lvl = 11
+                    mcnt = [30.0444, 31.2357]
+                    zoom_lvl = 11
 
                 vmap = folium.Map(location=mcnt, zoom_start=zoom_lvl, prefer_canvas=True)
 
@@ -2004,19 +1998,14 @@ with tab2:
                         )
                     ).add_to(vmap)
 
+                # قفل الـ returned_objects على النقر فقط لمنع الريفريش التلقائي عند تحريك الخريطة
                 mcd = st_folium(
                     vmap,
                     width="100%",
                     height=540,
                     key=f"vmap_portal_{portal_session_key}_{active_vid}_{rad}",
-                    returned_objects=["last_object_clicked", "zoom", "center"]
+                    returned_objects=["last_object_clicked"]
                 )
-
-                if mcd:
-                    if mcd.get("zoom"):
-                        st.session_state["portal_map_zoom"] = mcd["zoom"]
-                    if mcd.get("center"):
-                        st.session_state["portal_map_center"] = [mcd["center"]["lat"], mcd["center"]["lng"]]
 
                 clicked_zone, click_sig = extract_clicked_zone_direct(mcd, pa, all_known_zones)
                 if click_sig and click_sig != st.session_state.get("last_poly_click_sig"):
@@ -2045,8 +2034,6 @@ with tab2:
                     if selected_branch_key != active_vid:
                         st.session_state["portal_active_vid"] = selected_branch_key
                         st.session_state["portal_selected_zone"] = ""
-                        st.session_state.pop("portal_map_center", None)
-                        st.session_state.pop("portal_map_zoom", None)
                         st.rerun()
                 else:
                     st.markdown(
@@ -2572,7 +2559,7 @@ with tab2:
                             st.rerun()
 
 # ==========================================
-# Tab 3: Incoming Requests (الطلبات الواردة)
+# Tab 3: Incoming Requests
 # ==========================================
 if is_admin:
     with tab3:
