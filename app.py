@@ -795,7 +795,7 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                 "fault_cr": str(fault_val) if fault_val not in [None, "nan", "None"] else "-"
             }
             
-            # إذا كانت السلسلة فرع واحد فقط، انسخ مؤشرات الفرع لكي لا تظهر أصفاراً
+            # إذا كانت السلسلة فرع واحد فقط، انسخ مؤشرات الفرع بدقة كاملة
             if v_perf and (final_qc == 0 or len(c_vendors_match) <= 1):
                 v_qc_num = safe_num(v_perf.get("qc_orders", 0))
                 if v_qc_num > 0:
@@ -1060,13 +1060,11 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             </body>
             </html>
             """
-
             msg_vendor = MIMEMultipart()
             msg_vendor['Subject'] = vendor_subject
             msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
             msg_vendor['To'] = submitted_by_email
             msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
-
             part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             part_vendor.set_payload(excel_bytes)
             encoders.encode_base64(part_vendor)
@@ -2043,7 +2041,6 @@ with tab2:
                 selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
 
                 if not pa.empty:
-                    # تلوين حدود المنطقة المحددة بالبرتقالي، وباقي المناطق بلونها العادي
                     def get_portal_zone_styling(feature):
                         z_name = str(feature["properties"].get("Delivery Location Area Name", "")).strip()
                         z_low = z_name.lower()
@@ -2057,13 +2054,13 @@ with tab2:
                             
                             return {
                                 "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#ff5a00" if is_clicked_target else b_hex,  # خط برتقالي فقط للمنطقة المحددة
+                                "color": "#ff5a00" if is_clicked_target else b_hex,
                                 "weight": 4.5 if is_clicked_target else (2.2 if is_active_owner else 1.2),
                                 "fillOpacity": 0.80 if is_clicked_target else (0.50 if is_active_owner else 0.25)
                             }
                         return {
                             "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#ff5a00" if is_clicked_target else "#4a5568",  # خط برتقالي فقط للمنطقة المحددة
+                            "color": "#ff5a00" if is_clicked_target else "#4a5568",
                             "weight": 4.0 if is_clicked_target else 1.0,
                             "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
@@ -2071,6 +2068,11 @@ with tab2:
                     folium.GeoJson(
                         pa[["Delivery Location Area Name", "geometry"]].to_json(),
                         style_function=get_portal_zone_styling,
+                        highlight_function=lambda feature: {
+                            "color": "#ff5a00",       # تحديد برتقالي فاقع عند مرور الماوس
+                            "weight": 3.5,            # سمك الخط الخارجي
+                            "fillOpacity": 0.65       # وضوح لون المنطقة أثناء مرور الماوس
+                        },
                         tooltip=folium.GeoJsonTooltip(
                             fields=["Delivery Location Area Name"],
                             aliases=[T("المنطقة: ", "Zone: ")]
