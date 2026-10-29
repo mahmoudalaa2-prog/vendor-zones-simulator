@@ -76,7 +76,6 @@ section[data-testid="stSidebar"] {
     border-right: 1px solid rgba(255, 90, 0, 0.2) !important;
     background: linear-gradient(180deg, rgba(255, 90, 0, 0.06) 0%, rgba(14, 17, 23, 0) 100%) !important;
 }
-/* أزرار السايدبار فائقة الوضوح */
 section[data-testid="stSidebar"] button {
     background: rgba(255, 90, 0, 0.12) !important;
     border: 1.5px solid #ff5a00 !important;
@@ -740,7 +739,6 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
             summary_qc = safe_num(c_summary["qc_orders"].iloc[0]) if not c_summary.empty else 0.0
             summary_fail = safe_num(c_summary["fail_orders"].iloc[0]) if not c_summary.empty else 0.0
 
-            # إذا كانت السلسلة فرع واحد أو صف السلسلة يحتوي على 0 أوردر، اعتمد بيانات الفرع فوراً
             if summary_qc > 0 and len(c_vendors_match) > 1:
                 final_qc = summary_qc
                 final_fail = summary_fail
@@ -772,7 +770,6 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                 "fault_cr": str(fault_val) if fault_val not in [None, "nan", "None"] else "-"
             }
             
-            # إذا كانت السلسلة فرع واحد فقط، انسخ مؤشرات الفرع بدقة كاملة
             if v_perf and (final_qc == 0 or len(c_vendors_match) <= 1):
                 v_qc_num = safe_num(v_perf.get("qc_orders", 0))
                 if v_qc_num > 0:
@@ -1058,117 +1055,6 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         return True, "تم الإرسال بنجاح"
     except Exception as e:
         return False, f"فشل الإرسال: {e}"
-
-def build_zone_popup_card(area_name, info_list):
-    if not info_list:
-        return (
-            "<div style='font-family: Arial, sans-serif; font-size: 10.5px; width: 200px; padding: 3px; direction: rtl; text-align: right;'>"
-            + "<b style='color: #ff5a00;'>📍 " + str(area_name) + "</b><br>"
-            + "<span style='color: #6c757d; font-size: 9.5px;'>منطقة عامة (غير مغطاة حالياً)</span>"
-            + "</div>"
-        )
-    
-    branch_count = len(info_list)
-    parts = [
-        "<div style='font-family: Arial, sans-serif; width: 255px; max-height: 175px; overflow-y: auto; padding: 2px; direction: rtl; text-align: right;'>",
-        "<div style='position: sticky; top: 0; background: #ffffff; padding-bottom: 3px; border-bottom: 1.5px solid #ff5a00; margin-bottom: 4px; z-index: 10;'>",
-        "<b style='color: #ff5a00; font-size: 11.5px;'>📍 " + str(area_name) + "</b> <span style='color: #198754; font-size: 9.5px; font-weight: bold;'>(" + str(branch_count) + " فروع)</span>",
-        "</div>",
-        "<div style='display: flex; flex-direction: column; gap: 3px;'>"
-    ]
-    for b in info_list:
-        b_name = b.get("name", "")
-        b_hex = b.get("hex", "#28a745")
-        b_time = b.get("time", "-")
-        b_fee = b.get("fee", "-")
-        b_min = b.get("min_order", "-")
-        parts.append(
-            "<div style='border-right: 3px solid " + str(b_hex) + "; padding: 2px 5px; background: #f8f9fa; border-radius: 3px; font-size: 10px; line-height: 1.25;'>"
-            + "<b style='color: #212529;'>" + str(b_name) + "</b><br>"
-            + "<span style='color: #6c757d; font-size: 9px;'>⏱️ " + str(b_time) + " | 💵 " + str(b_fee) + " EGP | 🛒 أدنى طلب: " + str(b_min) + " EGP</span>"
-            + "</div>"
-        )
-    parts.append("</div></div>")
-    return "".join(parts)
-
-def build_vendor_popup_html(v_row, df_delivery, df_p):
-    v_id = str(v_row.get("clean_vid", ""))
-    c_id = str(v_row.get("clean_cid", ""))
-    v_name = v_row.get("clean_name", "")
-    c_name = v_row.get("clean_chain_name", "")
-    v_city = v_row.get("clean_city", "")
-    v_am = v_row.get("clean_am", "-")
-    is_act = v_row.get("clean_active", "Yes")
-    is_hid = v_row.get("clean_hidden", "No")
-
-    status_badge = "<span style='color:#198754; font-weight:bold;'>🟢 " + T("نشط", "Active") + "</span>" if is_act == "Yes" else "<span style='color:#dc3545; font-weight:bold;'>🔴 " + T("غير نشط", "Inactive") + "</span>"
-    hidden_badge = (" | <span style='color:#fd7e14; font-weight:bold;'>👁️ " + T("مخفي", "Hidden") + "</span>") if is_hid == "Yes" else ""
-
-    v_perf, _ = get_vendor_and_chain_perf(v_id, c_id, df_p)
-
-    match_d = pd.DataFrame()
-    if not df_delivery.empty and "clean_vid" in df_delivery.columns:
-        match_d = df_delivery[df_delivery["clean_vid"] == v_id]
-
-    html = f"""<div style='font-family: Arial, sans-serif; width: 280px; font-size: 11px;'>
-<h4 style='margin:0 0 4px 0; color:#ff5a00; font-size: 12.5px;'>💊 {v_name}</h4>
-<b>Vendor ID:</b> <code>{v_id}</code> | <b>Chain:</b> {c_name} (<code>{c_id}</code>)<br>
-<b>{T("المدينة", "City")}:</b> {v_city} | <b>AM:</b> <b>{v_am}</b><br>
-<b>{T("الحالة", "Status")}:</b> {status_badge}{hidden_badge}<br>
-<hr style='margin:5px 0; border:0; border-top:1px solid #ddd;'>"""
-
-    if v_perf:
-        html += f"""<div style='background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; padding:5px; margin-bottom:5px;'>
-<b style='color:#ff5a00; font-size: 11px;'>📊 {T("مؤشرات الأداء", "Performance")}:</b>
-<table style='width:100%; font-size:10.5px; margin-top:2px;'>
-<tr><td><b>QC Net Orders:</b></td><td style='text-align:right;'><b>{v_perf.get('qc_orders', '-')}</b></td></tr>
-<tr><td><b>Failed Orders:</b></td><td style='text-align:right;'>{v_perf.get('fail_orders', '-')} ({v_perf.get('fail_rate', '-')})</td></tr>
-<tr><td><b>Contact Rate:</b></td><td style='text-align:right;'>{v_perf.get('contact_rate', '-')}</td></tr>
-<tr><td><b>Fault Contact Rate:</b></td><td style='text-align:right;'>{v_perf.get('fault_cr', '-')}</td></tr>
-</table></div>"""
-
-    if not match_d.empty and "clean_zone" in match_d.columns:
-        zone_count = len(match_d["clean_zone"].dropna().unique())
-        html += f"<b style='color:#198754; font-size: 11px;'>🛵 {T('مناطق التوصيل', 'Delivery Zones')} ({zone_count}):</b>"
-        html += "<div style='max-height:100px; overflow-y:auto; margin-top:3px; border:1px solid #dee2e6; border-radius:4px;'>"
-        html += "<table style='width:100%; font-size:10px; border-collapse:collapse;'>"
-        html += f"<tr style='background:#f8f9fa; text-align:left; position:sticky; top:0;'><th style='padding:2px; border-bottom:1px solid #ddd;'>{T('المنطقة', 'Zone')}</th><th style='padding:2px; border-bottom:1px solid #ddd;'>{T('الوقت', 'Time')}</th><th style='padding:2px; border-bottom:1px solid #ddd;'>{T('السعر', 'Fee')}</th></tr>"
-        for _, r in match_d.iterrows():
-            z = r.get("clean_zone", "")
-            t = r.get("clean_time", "-")
-            f = r.get("clean_fee", "-")
-            if z:
-                html += f"<tr style='border-bottom:1px solid #f1f1f1;'><td style='padding:2px;'>{z}</td><td style='padding:2px;'>{t}</td><td style='padding:2px;'>{f}</td></tr>"
-        html += "</table></div>"
-    else:
-        html += f"<div style='color:#6c757d; font-size:10px; margin-top:3px;'>{T('لا توجد مناطق توصيل مخصصة لهذا الفرع.', 'No dedicated delivery zones.')}</div>"
-
-    html += "</div>"
-    return html
-
-def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
-    if not mcd:
-        return None, None
-        
-    obj = mcd.get("last_object_clicked")
-    if obj and isinstance(obj, dict):
-        props = obj.get("properties") or {}
-        poly_name = props.get("Delivery Location Area Name") or props.get("name")
-        if poly_name and poly_name in all_zones_list:
-            sig = f"obj_{poly_name}_{obj.get('lat')}_{obj.get('lng')}"
-            return poly_name, sig
-
-        lat, lng = obj.get("lat"), obj.get("lng")
-        if lat is not None and lng is not None and pa_gdf is not None and not pa_gdf.empty:
-            pt = Point(lng, lat)
-            matching = pa_gdf[pa_gdf.geometry.contains(pt)]
-            if not matching.empty:
-                smallest = matching.sort_values(by="area_size", ascending=True).iloc[0] if "area_size" in matching.columns else matching.iloc[0]
-                poly_name = smallest["Delivery Location Area Name"]
-                sig = f"pt_{poly_name}_{lat}_{lng}"
-                return poly_name, sig
-
-    return None, None
 
 # ==========================================
 # 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
@@ -1928,7 +1814,6 @@ with tab2:
                 )
             st.markdown("---")
 
-            # عرض دليل تمييز ألوان الفروع في السلسلة بتصميم داكن متناسق ونصوص واضحة جداً
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -1938,21 +1823,21 @@ with tab2:
                         zone_count = len(working_alloc.get(b_vid, {}))
                         is_active_card = (b_vid == active_vid)
                         
-                        border_css = f"2px solid #ff5a00" if is_active_card else "1px solid rgba(255, 90, 0, 0.25)"
-                        bg_css = "rgba(255, 90, 0, 0.12)" if is_active_card else "rgba(255, 255, 255, 0.03)"
-                        badge_tag = "<div style='display:inline-block; background: #ff5a00; color: #ffffff; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-top: 4px;'>🎯 الفرع المحدد حالياً</div>" if is_active_card else ""
+                        border_css = "2px solid #ff5a00" if is_active_card else "1px solid rgba(255, 90, 0, 0.25)"
+                        bg_css = "rgba(255, 90, 0, 0.15)" if is_active_card else "rgba(255, 255, 255, 0.03)"
+                        badge_tag = "<div style='margin-top: 5px;'><span style='background: #ff5a00; color: #ffffff; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: bold;'>🎯 الفرع المحدد حالياً</span></div>" if is_active_card else ""
                         
-                        st.markdown(
-                            f"""<div style='padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; border: {border_css}; border-right: 5px solid {b_info["hex"]}; background: {bg_css}; box-shadow: 0 4px 12px rgba(0,0,0,0.2); direction: rtl; text-align: right;'>
-                                <div style='color: #ffffff; font-size: 12.5px; font-weight: 800; line-height: 1.4;'>{b_info["name"]}</div>
-                                <div style='display: flex; justify-content: space-between; align-items: center; margin-top: 4px;'>
-                                    <span style='color: #8b949e; font-size: 11px; font-family: monospace;'>ID: {b_vid}</span>
-                                    <span style='color: #ff5a00; font-size: 11px; font-weight: 700;'>({zone_count} منطقة)</span>
-                                </div>
-                                {badge_tag}
-                            </div>""",
-                            unsafe_allow_html=True
+                        card_html = (
+                            f"<div style='padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; border: {border_css}; border-right: 5px solid {b_info['hex']}; background: {bg_css}; box-shadow: 0 4px 12px rgba(0,0,0,0.2); direction: rtl; text-align: right;'>"
+                            f"<div style='color: #ffffff; font-size: 12.5px; font-weight: 800; line-height: 1.4;'>{b_info['name']}</div>"
+                            f"<div style='display: flex; justify-content: space-between; align-items: center; margin-top: 4px;'>"
+                            f"<span style='color: #8b949e; font-size: 11px; font-family: monospace;'>ID: {b_vid}</span>"
+                            f"<span style='color: #ff5a00; font-size: 11px; font-weight: 700;'>({zone_count} منطقة)</span>"
+                            f"</div>"
+                            f"{badge_tag}"
+                            f"</div>"
                         )
+                        st.markdown(card_html, unsafe_allow_html=True)
 
             rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
 
@@ -1994,7 +1879,6 @@ with tab2:
 
                 active_row = vd[vd["clean_vid"] == active_vid]
                 
-                # حساب النطاق الجغرافي المشترك للفرع ومناطقه لتوسيطهما معاً بدقة وبزوم متوازن (12)
                 active_z_names = set(k.strip().lower() for k in working_alloc.get(active_vid, {}).keys())
                 branch_zones_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(active_z_names)] if not gdf_areas.empty else gpd.GeoDataFrame()
 
@@ -2044,7 +1928,6 @@ with tab2:
                 selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
 
                 if not pa.empty:
-                    # تلوين حدود كل منطقة باللون البرتقالي الصريح (#ff5a00)
                     def get_portal_zone_styling(feature):
                         z_name = str(feature["properties"].get("Delivery Location Area Name", "")).strip()
                         z_low = z_name.lower()
@@ -2058,14 +1941,14 @@ with tab2:
                             
                             return {
                                 "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#000000" if is_clicked_target else "#ff5a00",  # حدود برتقالية واضحة
-                                "weight": 4.0 if is_clicked_target else (2.8 if is_active_owner else 1.8),
-                                "fillOpacity": 0.85 if is_clicked_target else (0.55 if is_active_owner else 0.25)
+                                "color": "#ff5a00" if is_clicked_target else b_hex,
+                                "weight": 4.5 if is_clicked_target else (2.2 if is_active_owner else 1.2),
+                                "fillOpacity": 0.80 if is_clicked_target else (0.50 if is_active_owner else 0.25)
                             }
                         return {
                             "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#000000" if is_clicked_target else "#ff5a00",  # حدود برتقالية واضحة
-                            "weight": 3.0 if is_clicked_target else 1.5,
+                            "color": "#ff5a00" if is_clicked_target else "#4a5568",
+                            "weight": 4.0 if is_clicked_target else 1.0,
                             "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
 
@@ -2296,7 +2179,7 @@ with tab2:
 
                         raw_min = cur_z_info.get("min_order", 0.0)
                         try: curr_min = float(raw_min)
-                        except: min_order_val = 0.0
+                        except: curr_min = 0.0
                         curr_min = max(curr_min, 0.0)
 
                         time_idx = DELIVERY_TIME_CHOICES.index(curr_time) if curr_time in DELIVERY_TIME_CHOICES else 5
