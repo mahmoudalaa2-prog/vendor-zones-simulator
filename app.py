@@ -197,10 +197,10 @@ def test_smtp_connection(server_host, port_num, sender, password, recipient):
         msg["From"] = f"Talabat Operations Hub <{sender}>"
         msg["To"] = recipient
 
-if smtp_port == 465:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=12)
+        if int(port_num) == 465:
+            server = smtplib.SMTP_SSL(server_host, int(port_num), timeout=12)
         else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=12) 
+            server = smtplib.SMTP(server_host, int(port_num), timeout=12)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -502,7 +502,7 @@ def read_google_sheet_csv(url):
 # ==========================================
 # 4. جلب وتجهيز البيانات مع كاش 24 ساعة للسرعة الفائقة
 # ==========================================
-@st.cache_data(ttl=86400) # كاش ذكي لمدة 24 ساعة كاملة لحفظ البيانات بالرامات
+@st.cache_data(ttl=86400)
 def load_data():
     url_vendors = "https://docs.google.com/spreadsheets/d/12SSMW20Two2hRpHOuIXXifweJI82bZpJClhUAWSuYHk/export?format=csv&gid=0"
     url_areas = "https://docs.google.com/spreadsheets/d/1Y3AlqaHjp4nZup6QwOBgl6CT5z3XHjfzpRSx5Yw5byk/export?format=csv&gid=0"
@@ -1335,7 +1335,7 @@ if is_admin:
         
         if not map_active:
             st.info(T(
-                "⏸️ خريطة المراقبة العامة معطلة لتوفير أقصى سرعة لبوابة الفيندورز. فَعِّل المفتاح أعلاه عند الحاجة لاستعراض التغطية العامة.",
+                "⏸️ خريطة المراقبة العامة معطلة لتوفير أقصى سرعة لبوابة الفيندورز. فَعِّل المفتاح أعلاه عند الحاجة لاستعراض التغطية العامة.",
                 "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
@@ -1925,10 +1925,9 @@ with tab2:
                 st.subheader(f"🗺️ Map ({len([z for v in working_alloc.values() for z in v])} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
 
-                # ضبط مركز الخريطة ومستوى الزوم الواسع (11) كالصورة الثانية بدلاً من 14
                 active_row = vd[vd["clean_vid"] == active_vid]
                 
-                # حساب النطاق المشترك للفرع ومناطقه لتوسيطهما معاً في قلب الشاشة
+                # حساب النطاق الجغرافي المشترك للفرع ومناطقه لتوسيطهما معاً بدقة وبزوم مريح
                 active_z_names = set(k.strip().lower() for k in working_alloc.get(active_vid, {}).keys())
                 branch_zones_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(active_z_names)] if not gdf_areas.empty else gpd.GeoDataFrame()
 
@@ -2011,7 +2010,7 @@ with tab2:
                         )
                     ).add_to(vmap)
 
-                # قفل الـ returned_objects على النقر فقط لمنع الريفريش التلقائي عند تحريك الخريطة
+                # قفل الاستجابة على النقر فقط لمنع أي ريفريش أثناء تحريك/سحب الخريطة
                 mcd = st_folium(
                     vmap,
                     width="100%",
