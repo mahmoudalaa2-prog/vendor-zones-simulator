@@ -222,8 +222,7 @@ def init_users_db():
             "access_ids": "all"
         }]).to_csv(USERS_FILE, index=False)
 
-@st.cache_data(ttl=60)
-def get_cached_users():
+def get_users_df():
     required_cols = ["email", "password", "role", "access_type", "access_ids"]
     if db is not None:
         try:
@@ -233,8 +232,30 @@ def get_cached_users():
                 df = pd.DataFrame(records)
                 for c in required_cols:
                     if c not in df.columns: df[c] = ""
+                has_admin = (df["email"].astype(str).str.lower() == MASTER_ADMIN_EMAIL.lower()).any()
+                if not has_admin:
+                    admin_row = {
+                        "email": MASTER_ADMIN_EMAIL,
+                        "password": "123456",
+                        "role": "admin",
+                        "access_type": "all",
+                        "access_ids": "all"
+                    }
+                    db.collection("users").document(MASTER_ADMIN_EMAIL.lower()).set(admin_row)
+                    df = pd.concat([pd.DataFrame([admin_row]), df], ignore_index=True)
                 return df[required_cols]
+            else:
+                admin_row = {
+                    "email": MASTER_ADMIN_EMAIL,
+                    "password": "123456",
+                    "role": "admin",
+                    "access_type": "all",
+                    "access_ids": "all"
+                }
+                db.collection("users").document(MASTER_ADMIN_EMAIL.lower()).set(admin_row)
+                return pd.DataFrame([admin_row])[required_cols]
         except Exception: pass
+
     init_users_db()
     try:
         df_local = pd.read_csv(USERS_FILE)
@@ -249,9 +270,6 @@ def get_cached_users():
             "access_type": "all",
             "access_ids": "all"
         }])
-
-def get_users_df():
-    return get_cached_users()
 
 def check_is_master_admin(user_dict):
     if not user_dict:
@@ -277,7 +295,6 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
             if doc_ref.get().exists:
                 return False, T("هذا البريد مسجل بالفعل في قاعدة البيانات!", "Email already registered!")
             doc_ref.set(user_dict)
-            get_cached_users.clear()
             return True, T("تم إنشاء الحساب وحفظه في Firebase بنجاح فائق!", "User saved directly to Firebase!")
         except Exception as e:
             return False, f"خطأ Firebase: {e}"
@@ -289,7 +306,6 @@ def add_user(email, password, role, access_type="all", access_ids="all", current
     df = pd.concat([df, new_user], ignore_index=True)
     try: df.to_csv(USERS_FILE, index=False)
     except Exception: pass
-    get_cached_users.clear()
     return True, T("تم حفظ الحساب محلياً.", "Saved locally.")
 
 def update_user_permissions(email, role, access_type, access_ids, new_password=None, current_user_dict=None):
@@ -315,7 +331,6 @@ def update_user_permissions(email, role, access_type, access_ids, new_password=N
             doc_ref = db.collection("users").document(email_clean)
             doc_ref.set(update_data, merge=True)
             res_dict = doc_ref.get().to_dict()
-            get_cached_users.clear()
             return True, T("تم تحديث البيانات وكلمة المرور في Firebase فوراً!", "User updated in Firebase!"), res_dict
         except Exception as e:
             return False, f"خطأ Firebase: {e}", None
@@ -330,7 +345,6 @@ def update_user_permissions(email, role, access_type, access_ids, new_password=N
             df.loc[idx, "password"] = str(new_password).strip()
         try: df.to_csv(USERS_FILE, index=False)
         except Exception: pass
-        get_cached_users.clear()
         return True, T("تم تحديث البيانات محلياً!", "Updated locally!"), df.iloc[idx[0]].to_dict()
     return False, T("المستخدم غير موجود.", "User not found."), None
 
@@ -344,7 +358,6 @@ def delete_user(email, current_user_dict=None):
     if db is not None:
         try:
             db.collection("users").document(email_clean).delete()
-            get_cached_users.clear()
             return True, T("تم حذف الحساب من Firebase بنجاح!", "User deleted from Firebase successfully!")
         except Exception as e:
             return False, f"خطأ Firebase: {e}"
@@ -353,7 +366,6 @@ def delete_user(email, current_user_dict=None):
     df = df[df["email"].str.lower() != email_clean]
     try: df.to_csv(USERS_FILE, index=False)
     except Exception: pass
-    get_cached_users.clear()
     return True, T("تم حذف الحساب محلياً!", "User deleted locally!")
 
 # ==========================================
@@ -626,8 +638,8 @@ def load_data():
                 gdf_a["centroid_lat"] = centroids.y
                 gdf_a["centroid_lng"] = centroids.x
                 gdf_a["norm_key"] = gdf_a["Delivery Location Area Name"].apply(normalize_zone_key)
-                # تبسيط المضلعات لتسريع الـ Rendering بنسبة 300%
-                gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0015, preserve_topology=True)
+                # تبسيط المضلعات بنسبة ممتازة لتقليل حجم الـ GeoJSON وتسريع العرض
+                gdf_a["geometry"] = gdf_a["geometry"].simplify(tolerance=0.0018, preserve_topology=True)
             else: gdf_a = gpd.GeoDataFrame()
         else: gdf_a = gpd.GeoDataFrame()
     else: gdf_a = gpd.GeoDataFrame()
@@ -635,22 +647,6 @@ def load_data():
     return df_v, gdf_a, df_d, df_p
 
 df_vendors, gdf_areas, df_delivery, df_performance = load_data()
-
-# فهارس سريعة O(1) لتسريع الخريطة ومنع شلل المتصفح نهائياً
-@st.cache_data(ttl=86400)
-def build_fast_lookups():
-    d_lookup = {}
-    if not df_delivery.empty and "clean_vid" in df_delivery.columns:
-        for vid, grp in df_delivery.groupby("clean_vid"):
-            d_lookup[str(vid)] = grp[["clean_zone", "clean_time", "clean_fee"]].to_dict('records')
-            
-    p_lookup = {}
-    if not df_performance.empty and "clean_vid" in df_performance.columns:
-        for vid, grp in df_performance.groupby("clean_vid"):
-            p_lookup[str(vid)] = grp.iloc[0].to_dict()
-    return d_lookup, p_lookup
-
-delivery_lookup, perf_lookup = build_fast_lookups()
 
 def get_user_vendors(user_dict, df_v):
     if df_v.empty:
@@ -781,7 +777,6 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
                 doc_ref = coll.document()
                 batch.set(doc_ref, rec)
             batch.commit()
-            get_all_requests_df.clear()
         except Exception: pass
 
     if "session_requests_list" not in st.session_state:
@@ -795,7 +790,6 @@ def save_detailed_request(vendor_id, vendor_name, edited_df):
 
     return pd.DataFrame(new_records, columns=REQUESTS_COLUMNS)
 
-@st.cache_data(ttl=30)
 def get_all_requests_df():
     if db is not None:
         try:
@@ -835,6 +829,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 
     try:
         date_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             records_df.to_excel(writer, index=False, sheet_name=f"Vendor_{str(vendor_id)[:10]}")
@@ -858,6 +853,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         server.login(sender_email, sender_password)
 
         recipients_status = []
+
         admin_subject = f"🔔 [Action Required] Pricing & Coverage Request - {vendor_name} (ID: {vendor_id})"
         admin_html = f"""
         <!DOCTYPE html>
@@ -869,6 +865,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                 .card {{ max-width: 620px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }}
                 .header {{ background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%); color: #ffffff; padding: 24px 28px; text-align: left; }}
                 .header h1 {{ margin: 0; font-size: 20px; font-weight: 800; }}
+                .header p {{ margin: 6px 0 0 0; font-size: 13px; opacity: 0.9; letter-spacing: 0.3px; }}
                 .content {{ padding: 28px; line-height: 1.6; text-align: left; }}
                 .box {{ background: #fff7ed; border-left: 4px solid #ff5a00; padding: 14px 18px; border-radius: 6px; margin: 18px 0; }}
                 .table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
@@ -882,27 +879,34 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             <div class="card">
                 <div class="header">
                     <h1>💊 New Pricing & Coverage Submission</h1>
+                    <p>Talabat Pharmacy Operations & Logistics Platform</p>
                 </div>
                 <div class="content">
-                    <p>Dear <b>Mahmoud Alaa</b>,</p>
-                    <p>A new delivery zone & pricing configuration has been submitted via <b>Vendor Portal</b>:</p>
+                    <p style="font-size: 15px; margin-top: 0;">Dear <b>Mahmoud Alaa</b>,</p>
+                    <p>A new delivery zone & pricing configuration has just been submitted via the <b>Vendor Portal</b>. Please find the operational details below:</p>
+                    
                     <div class="box">
                         <div style="font-size: 16px; font-weight: 800; color: #ea580c;">🏬 {vendor_name}</div>
-                        <div><b>Vendor ID:</b> <code>{vendor_id}</code></div>
-                        <div><b>Submitted By:</b> {submitted_by_email}</div>
-                        <div>🕒 <b>Timestamp:</b> {date_str}</div>
+                        <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>Vendor ID:</b> <code>{vendor_id}</code></div>
+                        <div style="font-size: 13px; color: #334155; margin-top: 2px;"><b>Submitted By:</b> {submitted_by_email}</div>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>Timestamp:</b> {date_str}</div>
                     </div>
+
+                    <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📊 Submission Summary:</h4>
                     <table class="table">
-                        <tr><th>Total Zones in Request</th><td><b>{total_count}</b></td></tr>
+                        <tr><th>Total Zones in Request</th><td><b>{total_count}</b> zones</td></tr>
                         <tr><th>Newly Added Zones</th><td style="color:#16a34a; font-weight:bold;">+{add_count}</td></tr>
-                        <tr><th>Updated Zones</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
+                        <tr><th>Updated Zones (Fee / SLA / Min Order)</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
                         <tr><th>Deactivated Zones</th><td style="color:#dc2626; font-weight:bold;">-{deact_count}</td></tr>
                     </table>
+
                     <div class="notice">
-                        📎 Complete Excel workbook <code>{filename}</code> is attached.
+                        📎 <b>Attachment:</b> Complete Excel workbook <code>{filename}</code> is attached containing exact polygon coordinates, computed distance (km), delivery fees, delivery SLAs, and Minimum Order Amount.
                     </div>
                 </div>
-                <div class="footer">Automated System Notification • Talabat Operations</div>
+                <div class="footer">
+                    Automated System Notification • Talabat Logistics & Operations Engine
+                </div>
             </div>
         </body>
         </html>
@@ -935,6 +939,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                     .card {{ max-width: 620px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }}
                     .header {{ background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%); color: #ffffff; padding: 24px 28px; text-align: center; }}
                     .header h1 {{ margin: 0; font-size: 21px; font-weight: 800; }}
+                    .header p {{ margin: 6px 0 0 0; font-size: 13px; opacity: 0.9; letter-spacing: 0.3px; }}
                     .content {{ padding: 28px; line-height: 1.7; }}
                     .box {{ background: #f0fdf4; border-right: 4px solid #16a34a; padding: 14px 18px; border-radius: 6px; margin: 18px 0; }}
                     .table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
@@ -948,31 +953,44 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                 <div class="card">
                     <div class="header">
                         <h1>✅ تم استلام طلبكم بنجاح</h1>
+                        <p>بوابة شركاء وخدمات صيدليات طلبات • Talabat Vendor Portal</p>
                     </div>
                     <div class="content">
-                        <p>عزيزنا شريك النجاح / <b>فريق {vendor_name}</b>،</p>
-                        <p>تم استلام طلب تعديل مناطق التغطية وأسعار التوصيل بنجاح وجارٍ مراجعته من قبل إدارة العمليات.</p>
+                        <p style="font-size: 15px; margin-top: 0;">عزيزنا شريك النجاح / <b>فريق {vendor_name}</b>،</p>
+                        <p>نشكركم على استخدام بوابة الفيندور. نود إحاطتكم بأنه تم استلام وتوثيق طلب تعديل مناطق التغطية وأسعار التوصيل والحد الأدنى للطلب بنجاح، وجارٍ مراجعته وتدقيقه من قبل فريق العمليات واللوجستيات.</p>
+                        
                         <div class="box">
-                            <div>🏬 {vendor_name} (Vendor ID: <code>{vendor_id}</code>)</div>
-                            <div>🕒 {date_str}</div>
+                            <div style="font-size: 16px; font-weight: 800; color: #15803d;">🏬 {vendor_name}</div>
+                            <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>كود الفرع (Vendor ID):</b> <code>{vendor_id}</code></div>
+                            <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>تاريخ ووقت الإرسال:</b> {date_str}</div>
                         </div>
+
+                        <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📋 ملخص التعديلات المرسلة في هذا الطلب:</h4>
                         <table class="table">
-                            <tr><th>إجمالي المناطق</th><td><b>{total_count}</b></td></tr>
-                            <tr><th>جديدة</th><td style="color:#16a34a;">+{add_count}</td></tr>
-                            <tr><th>محدثة</th><td style="color:#ea580c;">{edit_count}</td></tr>
-                            <tr><th>ملغاة</th><td style="color:#dc2626;">-{deact_count}</td></tr>
+                            <tr><th>إجمالي المناطق في الطلب</th><td><b>{total_count}</b> مناطق</td></tr>
+                            <tr><th>مناطق جديدة مضافة</th><td style="color:#16a34a; font-weight:bold;">+{add_count} منطقة</td></tr>
+                            <tr><th>مناطق تم تعديل سعرها أو وقتها أو حدها الأدنى</th><td style="color:#ea580c; font-weight:bold;">{edit_count} منطقة</td></tr>
+                            <tr><th>مناطق ملغاة التفعيل</th><td style="color:#dc2626; font-weight:bold;">-{deact_count} منطقة</td></tr>
                         </table>
+
+                        <div class="notice">
+                            📎 <b>نسخة من طلبكم:</b> مرفق بهذه الرسالة ملف إكسيل كامل <code>{filename}</code> يتضمن كافة تفاصيل المناطق التي قمتم بتعديلها مع المسافات المحسوبة وأوقات ورسوم التوصيل والحد الأدنى للطلب المقترح للاحتفاظ بها في سجلاتكم.
+                        </div>
                     </div>
-                    <div class="footer">فريق دعم شركاء وعمليات صيدليات طلبات</div>
+                    <div class="footer">
+                        فريق دعم شركاء وعمليات صيدليات طلبات • جمهورية مصر العربية
+                    </div>
                 </div>
             </body>
             </html>
             """
+
             msg_vendor = MIMEMultipart()
             msg_vendor['Subject'] = vendor_subject
             msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
             msg_vendor['To'] = submitted_by_email
             msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
+
             part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             part_vendor.set_payload(excel_bytes)
             encoders.encode_base64(part_vendor)
@@ -988,8 +1006,40 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
     except Exception as e:
         return False, f"فشل الإرسال: {e}"
 
-# Popup فائق السرعة O(1) بالبيانات الكاملة وبدون إرهاق المتصفح
-def build_vendor_popup_html(v_row, d_lookup, p_lookup):
+def build_zone_popup_card(area_name, info_list):
+    if not info_list:
+        return (
+            "<div style='font-family: Arial, sans-serif; font-size: 10.5px; width: 200px; padding: 3px; direction: rtl; text-align: right;'>"
+            + "<b style='color: #ff5a00;'>📍 " + str(area_name) + "</b><br>"
+            + "<span style='color: #6c757d; font-size: 9.5px;'>منطقة عامة (غير مغطاة حالياً)</span>"
+            + "</div>"
+        )
+    
+    branch_count = len(info_list)
+    parts = [
+        "<div style='font-family: Arial, sans-serif; width: 255px; max-height: 175px; overflow-y: auto; padding: 2px; direction: rtl; text-align: right;'>",
+        "<div style='position: sticky; top: 0; background: #ffffff; padding-bottom: 3px; border-bottom: 1.5px solid #ff5a00; margin-bottom: 4px; z-index: 10;'>",
+        "<b style='color: #ff5a00; font-size: 11.5px;'>📍 " + str(area_name) + "</b> <span style='color: #198754; font-size: 9.5px; font-weight: bold;'>(" + str(branch_count) + " فروع)</span>",
+        "</div>",
+        "<div style='display: flex; flex-direction: column; gap: 3px;'>"
+    ]
+    for b in info_list:
+        b_name = b.get("name", "")
+        b_hex = b.get("hex", "#28a745")
+        b_time = b.get("time", "-")
+        b_fee = b.get("fee", "-")
+        b_min = b.get("min_order", "-")
+        parts.append(
+            "<div style='border-right: 3px solid " + str(b_hex) + "; padding: 2px 5px; background: #f8f9fa; border-radius: 3px; font-size: 10px; line-height: 1.25;'>"
+            + "<b style='color: #212529;'>" + str(b_name) + "</b><br>"
+            + "<span style='color: #6c757d; font-size: 9px;'>⏱️ " + str(b_time) + " | 💵 " + str(b_fee) + " EGP | 🛒 أدنى طلب: " + str(b_min) + " EGP</span>"
+            + "</div>"
+        )
+    parts.append("</div></div>")
+    return "".join(parts)
+
+# بناء Popup سريع وخفيف للفرع لمنع تهنيج الخريطة في الأعداد الكبيرة
+def build_fast_vendor_popup_html(v_row):
     v_id = str(v_row.get("clean_vid", ""))
     c_id = str(v_row.get("clean_cid", ""))
     v_name = v_row.get("clean_name", "")
@@ -997,65 +1047,16 @@ def build_vendor_popup_html(v_row, d_lookup, p_lookup):
     v_city = v_row.get("clean_city", "")
     v_am = v_row.get("clean_am", "-")
     is_act = v_row.get("clean_active", "Yes")
-    is_hid = v_row.get("clean_hidden", "No")
 
-    status_badge = "<span style='color:#198754; font-weight:bold;'>🟢 نشط</span>" if is_act == "Yes" else "<span style='color:#dc3545; font-weight:bold;'>🔴 غير نشط</span>"
-    hidden_badge = " | <span style='color:#fd7e14; font-weight:bold;'>👁️ مخفي</span>" if is_hid == "Yes" else ""
+    status_tag = "<b style='color:#198754;'>🟢 نشط</b>" if is_act == "Yes" else "<b style='color:#dc3545;'>🔴 غير نشط</b>"
 
-    v_perf = p_lookup.get(v_id, {})
-    match_d = d_lookup.get(v_id, [])
-
-    html = f"""<div style='font-family: Arial, sans-serif; width: 260px; font-size: 11px; direction: rtl; text-align: right;'>
-<h4 style='margin:0 0 4px 0; color:#ff5a00; font-size: 12.5px;'>💊 {v_name}</h4>
-<b>Vendor ID:</b> <code>{v_id}</code> | <b>Chain:</b> {c_name} (<code>{c_id}</code>)<br>
-<b>المدينة:</b> {v_city} | <b>AM:</b> <b>{v_am}</b><br>
-<b>الحالة:</b> {status_badge}{hidden_badge}<br>
-<hr style='margin:4px 0; border:0; border-top:1px solid #ddd;'>"""
-
-    if v_perf:
-        html += f"""<div style='background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; padding:4px; margin-bottom:4px; font-size:10px;'>
-<b style='color:#ff5a00;'>📊 مؤشرات الأداء:</b><br>
-<b>QC Orders:</b> {v_perf.get('qc_orders', '-')} | <b>Failed:</b> {v_perf.get('fail_orders', '-')} ({v_perf.get('fail_rate', '-')})<br>
-<b>Contact Rate:</b> {v_perf.get('contact_rate', '-')}
+    return f"""<div style='font-family: Arial, sans-serif; width: 220px; font-size: 11px; direction: rtl; text-align: right;'>
+<b style='color:#ff5a00; font-size: 13px;'>💊 {v_name}</b><br>
+<b>Vendor ID:</b> <code>{v_id}</code><br>
+<b>السلسلة:</b> {c_name} (<code>{c_id}</code>)<br>
+<b>المدينة:</b> {v_city} | <b>AM:</b> {v_am}<br>
+<b>الحالة:</b> {status_tag}
 </div>"""
-
-    if match_d:
-        zone_count = len(match_d)
-        html += f"<b style='color:#198754; font-size: 10.5px;'>🛵 مناطق التوصيل ({zone_count}):</b>"
-        html += "<div style='max-height:80px; overflow-y:auto; margin-top:2px; border:1px solid #dee2e6; border-radius:4px;'>"
-        html += "<table style='width:100%; font-size:9.5px; border-collapse:collapse;'>"
-        for r in match_d[:8]:
-            z = r.get("clean_zone", "")
-            t = r.get("clean_time", "-")
-            f = r.get("clean_fee", "-")
-            if z:
-                html += f"<tr style='border-bottom:1px solid #f1f1f1;'><td style='padding:1px;'>{z}</td><td style='padding:1px;'>{t}</td><td style='padding:1px;'>{f} EGP</td></tr>"
-        if len(match_d) > 8:
-            html += f"<tr><td colspan='3' style='text-align:center; color:#888; font-size:9px;'>+ {len(match_d) - 8} مناطق إضافية...</td></tr>"
-        html += "</table></div>"
-    else:
-        html += "<div style='color:#6c757d; font-size:9.5px; margin-top:2px;'>لا توجد مناطق توصيل مخصصة.</div>"
-
-    html += "</div>"
-    return html
-
-def build_zone_popup_card(area_name, info_list):
-    if not info_list:
-        return f"<div style='font-family: Arial; font-size: 11px; padding: 3px; direction: rtl;'><b>📍 {area_name}</b><br><span style='color: gray;'>منطقة غير مغطاة</span></div>"
-    
-    parts = [
-        f"<div style='font-family: Arial; width: 230px; max-height: 160px; overflow-y: auto; padding: 2px; direction: rtl; text-align: right;'>",
-        f"<b style='color: #ff5a00;'>📍 {area_name}</b> <span style='color: green;'>({len(info_list)} فروع)</span><hr style='margin:3px 0;'>"
-    ]
-    for b in info_list:
-        parts.append(
-            f"<div style='border-right: 3px solid {b.get('hex', '#28a745')}; padding: 2px 5px; margin-bottom: 3px; background: #f8f9fa; font-size: 10px;'>"
-            f"<b>{b.get('name', '')}</b><br>"
-            f"⏱️ {b.get('time', '-')} | 💵 {b.get('fee', '-')} EGP"
-            f"</div>"
-        )
-    parts.append("</div>")
-    return "".join(parts)
 
 def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     if not mcd:
@@ -1082,7 +1083,7 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     return None, None
 
 # ==========================================
-# 5. شاشة تسجيل الدخول
+# 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
 # ==========================================
 init_users_db()
 
@@ -1137,6 +1138,7 @@ if not st.session_state["logged_in"]:
             <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff5a00; border-radius: 12px; padding: 16px 12px; text-align: center;">
                 <div style="font-size: 22px; font-weight: 900; color: #ff5a00;">1,200+</div>
                 <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("مضلع جغرافي", "Geospatial Zones")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("خرائط دقيقة لحظية", "Polygons simulator")}</div>
             </div>
             """, unsafe_allow_html=True)
         with kpi_c2:
@@ -1144,6 +1146,7 @@ if not st.session_state["logged_in"]:
             <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #28a745; border-radius: 12px; padding: 16px 12px; text-align: center;">
                 <div style="font-size: 22px; font-weight: 900; color: #28a745;">400+</div>
                 <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("فرع وسلسلة صيدليات", "Pharmacy Branches")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تغطية شاملة للمحافظات", "Nationwide coverage")}</div>
             </div>
             """, unsafe_allow_html=True)
         with kpi_c3:
@@ -1151,6 +1154,7 @@ if not st.session_state["logged_in"]:
             <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff7700; border-radius: 12px; padding: 16px 12px; text-align: center;">
                 <div style="font-size: 22px; font-weight: 900; color: #ff7700;">Live GPS</div>
                 <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("حساب المسافات بدقة", "Distance Engine")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تعديل فوري وسريع", "Haversine & Edit tag")}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -1158,33 +1162,57 @@ if not st.session_state["logged_in"]:
         with st.form("login_form"):
             st.markdown(f"""
             <div style="text-align: center; margin-bottom: 20px;">
+                <div style="width: 52px; height: 52px; background: rgba(255, 90, 0, 0.15); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 10px; border: 1px solid rgba(255, 90, 0, 0.3);">
+                    <span style="font-size: 24px;">🔐</span>
+                </div>
                 <h3 style="margin: 0; font-size: 19px; font-weight: 800; color: #ffffff;">
                     {T("تسجيل الدخول للنظام", "Portal Access Login")}
                 </h3>
+                <p style="margin: 4px 0 0 0; font-size: 12px; color: #8b949e;">
+                    {T("أدخل البريد الإلكتروني وكلمة المرور للمتابعة", "Enter corporate credentials to access dashboard")}
+                </p>
             </div>
             """, unsafe_allow_html=True)
 
-            email_input = st.text_input(T("البريد الإلكتروني (Email):", "Email Address:")).strip().lower()
-            password_input = st.text_input(T("كلمة المرور (Password):", "Password:"), type="password").strip()
+            email_input = st.text_input(
+                T("البريد الإلكتروني (Email):", "Email Address:"),
+                placeholder="name@talabat.com"
+            ).strip().lower()
 
-            login_btn = st.form_submit_button(T("🚀 الدخول إلى الداشبورد", "🚀 Enter Dashboard"), type="primary", use_container_width=True)
+            password_input = st.text_input(
+                T("كلمة المرور (Password):", "Password:"),
+                type="password",
+                placeholder="••••••••"
+            ).strip()
+
+            st.write("")
+            login_btn = st.form_submit_button(
+                T("🚀 الدخول إلى الداشبورد (Enter Dashboard)", "🚀 Enter Dashboard"),
+                type="primary",
+                use_container_width=True
+            )
 
             if login_btn:
                 users_df = get_users_df()
                 match = users_df[(users_df["email"].str.lower() == email_input) & (users_df["password"].astype(str) == password_input)]
 
                 if not match.empty:
+                    user_row = match.iloc[0].to_dict()
                     st.session_state["logged_in"] = True
-                    st.session_state["current_user"] = match.iloc[0].to_dict()
+                    st.session_state["current_user"] = user_row
+                    st.success(T(f"تم تسجيل الدخول بنجاح كـ {user_row['role']}!", f"Logged in successfully as {user_row['role']}!"))
                     st.rerun()
                 else:
                     st.error(T("❌ البريد الإلكتروني أو كلمة المرور غير صحيحة.", "❌ Invalid email or password."))
 
+        st.markdown(f"""
+        <div style="text-align: center; margin-top: 15px; font-size: 11px; color: #6e7681;">
+            🔒 {T("نظام مشفر ومحمي • Talabat Q-Commerce & Logistics Platform", "Encrypted & Authorized • Talabat Logistics Platform")}
+        </div>
+        """, unsafe_allow_html=True)
+
     st.stop()
 
-# ==========================================
-# 6. بيئة العمل بعد تسجيل الدخول
-# ==========================================
 current_user = st.session_state["current_user"]
 is_admin = current_user["role"] == "admin"
 is_master_admin = check_is_master_admin(current_user)
@@ -1196,7 +1224,12 @@ inactive_user_branches = total_user_branches - active_user_branches
 hidden_user_branches = len(user_vendors[user_vendors["clean_hidden"] == "Yes"]) if (not user_vendors.empty and "clean_hidden" in user_vendors.columns) else 0
 
 with st.sidebar:
-    lang_choice = st.radio("🌐 Language / اللغة", ["العربية", "English"], index=0 if st.session_state["lang"] == "ar" else 1, horizontal=True)
+    lang_choice = st.radio(
+        "🌐 Language / اللغة",
+        options=["العربية", "English"],
+        index=0 if st.session_state["lang"] == "ar" else 1,
+        horizontal=True
+    )
     new_lang = "ar" if lang_choice == "العربية" else "en"
     if new_lang != st.session_state["lang"]:
         st.session_state["lang"] = new_lang
@@ -1204,7 +1237,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.write(f"👤 **{T('المستخدم', 'User')}:** `{current_user['email']}`")
-    st.write(f"🛡️ **{T('الصلاحية', 'Role')}:** `{'👑 MASTER ADMIN' if is_master_admin else current_user['role'].upper()}`")
+    role_badge = "👑 MASTER ADMIN" if is_master_admin else current_user['role'].upper()
+    st.write(f"🛡️ **{T('الصلاحية', 'Role')}:** `{role_badge}`")
+    if current_user.get("access_type") != "all":
+        st.write(f"📌 **{T('نطاق الربط', 'Scope')}:** `{current_user['access_type']}`")
     
     st.markdown("""
     <div style="background: rgba(255, 90, 0, 0.15); border: 1px solid #ff5a00; padding: 4px 8px; border-radius: 6px; font-size: 11px; color: #ff5a00; font-weight: bold; text-align: center; margin: 8px 0;">
@@ -1218,22 +1254,28 @@ with st.sidebar:
         value=f"{total_user_branches:,}",
         delta=f"🟢 {active_user_branches} " + T("نشط", "Active") if total_user_branches > 0 else "0"
     )
+    st.caption(T(
+        f"📊 تفاصيل: نشط: {active_user_branches} | غير نشط: {inactive_user_branches} | مخفي: {hidden_user_branches}",
+        f"📊 Details: Active: {active_user_branches} | Inactive: {inactive_user_branches} | Hidden: {hidden_user_branches}"
+    ))
     
     if is_admin:
         st.metric(T("🗺️ إجمالي المناطق الجغرافية", "Total Geographic Zones"), f"{len(gdf_areas):,}")
 
+    if "last_sync_time" not in st.session_state:
+        st.session_state["last_sync_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+        
     if st.button(T("🔄 مزامنة وتحديث البيانات الآن", "🔄 Sync Live Data Now"), use_container_width=True):
         st.cache_data.clear()
+        st.session_state["last_sync_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
         st.rerun()
         
+    st.caption(f"🕒 **{T('تاريخ آخر مزامنة', 'Last Synced')}:** `{st.session_state['last_sync_time']}`")
     st.markdown("---")
     if st.button(T("🚪 تسجيل الخروج (Logout)", "🚪 Logout"), use_container_width=True):
         st.session_state.clear()
         st.rerun()
 
-# ==========================================
-# استرجاع نظام التابات الأصلي بنفس الترتيب الكامل
-# ==========================================
 if is_master_admin:
     tab1, tab2, tab3, tab4 = st.tabs([
         T("🗺️ Overview Map", "🗺️ Overview Map"),
@@ -1251,7 +1293,7 @@ else:
     tab2 = st.container()
 
 # ==========================================
-# Tab 1: Overview Map (كافة الفلاتر الـ 6 الأصلية موجودة وسريعة بنظام الفهارس الفورية)
+# Tab 1: Admin Map (نسخة فائقة السرعة والخفة)
 # ==========================================
 if is_admin:
     with tab1:
@@ -1262,7 +1304,7 @@ if is_admin:
         if not map_active:
             st.info(T(
                 "⏸️ خريطة المراقبة العامة معطلة لتوفير أقصى سرعة لبوابة الفيندورز. فَعِّل المفتاح أعلاه عند الحاجة لاستعراض التغطية العامة.",
-                "⏸️ Admin overview map is disabled to maximize speed. Toggle switch above to view."
+                "⏸️ Admin overview map is disabled to maximize Vendor Portal speed. Toggle switch above when you need to view the map."
             ))
         else:
             if "admin_filter_ver" not in st.session_state:
@@ -1317,8 +1359,7 @@ if is_admin:
 
             with f_col4:
                 if not chain_subset.empty and "clean_vid" in chain_subset.columns:
-                    vendor_opts = dict(zip(chain_subset["clean_vid"], chain_subset["clean_name"] + " (ID: " + chain_subset["clean_vid"] + ")"
-                    ))
+                    vendor_opts = dict(zip(chain_subset["clean_vid"], chain_subset["clean_name"] + " (ID: " + chain_subset["clean_vid"] + ")"))
                     vendor_options = sorted(list(vendor_opts.keys()), key=lambda x: vendor_opts.get(x, x))
                 else:
                     vendor_opts, vendor_options = {}, []
@@ -1377,28 +1418,36 @@ if is_admin:
             cnt_total, cnt_active, cnt_inactive, tot_orders, tot_failed, rate_str = get_performance_kpis(df_disp, df_performance)
 
             card_col1, card_col2, card_col3, card_col4 = st.columns(4)
-            card_col1.metric(T("🏬 إجمالي الفروع", "Total Branches"), f"{cnt_total:,}", delta=f"{cnt_inactive} " + T("غير نشط", "Inactive") if cnt_inactive > 0 else None, delta_color="off")
-            card_col2.metric(T("🟢 الفروع النشطة", "Active Branches"), f"{cnt_active:,}", delta=f"{(cnt_active / cnt_total * 100):.1f}%" if cnt_total > 0 else "0%")
-            card_col3.metric(T("📦 إجمالي عدد الأوردرات", "Total Orders"), f"{tot_orders:,}", delta=T("QC Net Orders", "QC Net Orders"), delta_color="off")
-            card_col4.metric(T("⚠️ إجمالي Vendor Fail Rate", "Fail Rate"), rate_str, delta=f"{tot_failed:,} " + T("أوردر ملغي", "Failed") if tot_failed > 0 else None, delta_color="inverse")
+            card_col1.metric(
+                T("🏬 إجمالي الفروع", "🏬 Total Branches"),
+                f"{cnt_total:,}",
+                delta=f"{cnt_inactive} " + T("غير نشط", "Inactive") if cnt_inactive > 0 else None,
+                delta_color="off"
+            )
+            card_col2.metric(
+                T("🟢 الفروع النشطة", "🟢 Active Branches"),
+                f"{cnt_active:,}",
+                delta=f"{(cnt_active / cnt_total * 100):.1f}%" if cnt_total > 0 else "0%"
+            )
+            card_col3.metric(
+                T("📦 إجمالي عدد الأوردرات", "📦 Total Orders"),
+                f"{tot_orders:,}",
+                delta=T("QC Net Orders", "QC Net Orders"),
+                delta_color="off"
+            )
+            card_col4.metric(
+                T("⚠️ إجمالي Vendor Fail Rate", "⚠️ Total Vendor Fail Rate"),
+                rate_str,
+                delta=f"{tot_failed:,} " + T("أوردر ملغي", "Failed Orders") if tot_failed > 0 else None,
+                delta_color="inverse"
+            )
 
-            # تجهيز ألوان الفروع بدون أي بطء
-            vendor_color_map = {}
-            for idx, (_, b_row) in enumerate(df_disp[["clean_vid", "clean_name", "clean_chain_name"]].drop_duplicates().iterrows()):
-                pal = BRANCH_PALETTE[idx % len(BRANCH_PALETTE)]
-                vendor_color_map[b_row["clean_vid"]] = {
-                    "name": b_row["clean_name"],
-                    "hex": pal.get("hex", "#28a745"),
-                    "folium": pal.get("folium", "green")
-                }
-
-            if (selected_chains or selected_vendors or (len(vendor_color_map) <= 12 and len(vendor_color_map) > 1)):
-                st.write(T("🎨 **دليل تمييز ألوان الفروع:**", "🎨 **Branch Color Legend:**"))
-                n_cols = min(max(len(vendor_color_map), 1), 4)
-                leg_cols = st.columns(n_cols)
-                for idx, (b_vid, b_info) in enumerate(vendor_color_map.items()):
-                    with leg_cols[idx % n_cols]:
-                        st.markdown(f"<div style='padding:4px 8px; border-radius:5px; border-left: 5px solid {b_info['hex']}; background: #f8f9fa; font-size:11px;'><b>{b_info['name']}</b> ({b_vid})</div>", unsafe_allow_html=True)
+            # زر تحكم لتفعيل رسم حدود المضلعات لتوفير أقصى سرعة
+            render_polygons_chk = st.checkbox(
+                T("🗺️ إظهار حدود مضلعات المناطق الجغرافية على الخريطة (Geospatial Zones Polygons)", "🗺️ Render Delivery Zones Polygons"),
+                value=(len(selected_chains) > 0 or len(selected_vendors) > 0),
+                help=T("إلغاء التحديد يسرع الخريطة فوراً عند استعراض مئات الفروع بمحافظة كاملة.", "Uncheck to dramatically boost map speed when viewing whole cities.")
+            )
 
             try:
                 if selected_vendors and not plot_vendors.empty:
@@ -1413,43 +1462,62 @@ if is_admin:
                     map_center = [30.0444, 31.2357]
                     zoom_lvl = 7
 
-                # Canvas mode لمنع تهنيج الشاشة نهائياً
                 m_admin = folium.Map(location=map_center, zoom_start=zoom_lvl, prefer_canvas=True)
+                
+                # رسم المضلعات فقط إذا تم طلبها وبشكل فائق الخفة
+                if render_polygons_chk and not gdf_areas.empty:
+                    if not plot_vendors.empty:
+                        minx, miny, maxx, maxy = plot_vendors["lng"].min(), plot_vendors["lat"].min(), plot_vendors["lng"].max(), plot_vendors["lat"].max()
+                        bbox = box(minx - 0.08, miny - 0.08, maxx + 0.08, maxy + 0.08)
+                        gdf_to_draw = gdf_areas[gdf_areas.geometry.intersects(bbox)].copy()
+                    else:
+                        gdf_to_draw = gdf_areas.head(150).copy()
 
-                # رسم المضلعات للمناطق المحيطة بالفروع المعروضة فقط
-                if not gdf_areas.empty and not plot_vendors.empty:
-                    minx, miny, maxx, maxy = plot_vendors["lng"].min(), plot_vendors["lat"].min(), plot_vendors["lng"].max(), plot_vendors["lat"].max()
-                    bbox = box(minx - 0.08, miny - 0.08, maxx + 0.08, maxy + 0.08)
-                    nearby_areas = gdf_areas[gdf_areas.geometry.intersects(bbox)].copy()
-                    
-                    if not nearby_areas.empty:
+                    if not gdf_to_draw.empty:
                         folium.GeoJson(
-                            nearby_areas[["Delivery Location Area Name", "geometry"]].to_json(),
+                            gdf_to_draw[["Delivery Location Area Name", "geometry"]].to_json(),
                             name="Delivery Zones",
-                            style_function=lambda x: {"fillColor": "#ff5a00", "color": "#002266", "weight": 1.0, "fillOpacity": 0.08},
-                            tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=[T("المنطقة: ", "Zone: ")])
+                            style_function=lambda feature: {
+                                "fillColor": "#ff5a00",
+                                "color": "#002266",
+                                "weight": 1.2,
+                                "fillOpacity": 0.12
+                            },
+                            tooltip=folium.GeoJsonTooltip(
+                                fields=["Delivery Location Area Name"],
+                                aliases=[T("المنطقة: ", "Zone: ")]
+                            )
                         ).add_to(m_admin)
 
-                # رسم الماركرز السريعة فوراً في أجزاء من الثانية مع استدعاء الـ Popups السريعة O(1)
+                # رسم الماركرز السريعة داخل MarkerCluster
                 if not plot_vendors.empty:
-                    cluster = MarkerCluster(options={"maxClusterRadius": 45, "disableClusteringAtZoom": 15}).add_to(m_admin)
+                    cluster = MarkerCluster(options={"maxClusterRadius": 50, "disableClusteringAtZoom": 15}).add_to(m_admin)
                     for _, row in plot_vendors.iterrows():
                         v_id_str = str(row["clean_vid"])
-                        b_col = vendor_color_map.get(v_id_str, {}).get("folium", "blue")
-                        popup_html = build_vendor_popup_html(row, delivery_lookup, perf_lookup)
-                        folium.Marker(
-                            location=[row['lat'], row['lng']],
-                            popup=folium.Popup(popup_html, max_width=270),
-                            tooltip=f"💊 {row['clean_name']} ({v_id_str})",
-                            icon=folium.Icon(color=b_col, icon="medkit", prefix="fa")
-                        ).add_to(cluster)
+                        fast_popup = build_fast_vendor_popup_html(row)
+                        is_single = (len(selected_vendors) == 1 and v_id_str in selected_vendors)
 
-                st_folium(m_admin, width="100%", height=620, key="admin_overview_map_folium", returned_objects=[])
+                        if is_single:
+                            folium.Marker(
+                                location=[row['lat'], row['lng']],
+                                popup=folium.Popup(fast_popup, max_width=250),
+                                tooltip=f"💊 {row['clean_name']} (ID: {v_id_str})",
+                                icon=folium.Icon(color="green", icon="medkit", prefix="fa")
+                            ).add_to(m_admin)
+                        else:
+                            folium.Marker(
+                                location=[row['lat'], row['lng']],
+                                popup=folium.Popup(fast_popup, max_width=250),
+                                tooltip=f"💊 {row['clean_name']} ({v_id_str})",
+                                icon=folium.Icon(color="blue", icon="medkit", prefix="fa")
+                            ).add_to(cluster)
+
+                st_folium(m_admin, width="100%", height=600, key="admin_overview_map_folium", returned_objects=[])
             except Exception as e:
-                st.warning(f"ملاحظة: {e}")
+                st.warning(f"ملاحظة أثناء عرض الخريطة: {e}")
 
 # ==========================================
-# Tab 2: Vendor Portal (مع خاصية رفع الملف والتعامل الذكي مع السلسلة والفرع)
+# Tab 2: Vendor Portal
 # ==========================================
 with tab2:
     st.header(T("بوابة الفيندور - التغطية والتسعير والأداء", "Vendor Portal - Coverage, Pricing & Performance"))
@@ -1473,9 +1541,11 @@ with tab2:
             m_c = user_vendors[user_vendors["clean_cid"] == cid] if not user_vendors.empty else pd.DataFrame()
             p_vends = m_v if not m_v.empty else (m_c if not m_c.empty else pd.DataFrame())
             if p_vends.empty:
-                st.error(T("❌ الكود غير صحيح أو لا تملك صلاحية لإدارته.", "❌ ID not found in database or not in your scope."))
+                err_msg = T("❌ الكود غير صحيح أو لا تملك صلاحية لإدارته.", "❌ ID not found in database or not in your scope.")
+                st.error(err_msg)
         else:
-            st.info(T("ℹ️ يرجى إدخال كود الفرع (Vendor ID) أو السلسلة (Chain ID) أعلاه للبدء.", "ℹ️ Please enter a Vendor ID or Chain ID above to begin."))
+            info_msg = T("ℹ️ يرجى إدخال كود الفرع (Vendor ID) أو السلسلة (Chain ID) أعلاه للبدء.", "ℹ️ Please enter a Vendor ID or Chain ID above to begin.")
+            st.info(info_msg)
     else:
         p_vends = user_vendors.copy() if not user_vendors.empty else pd.DataFrame()
         if p_vends.empty:
@@ -1489,7 +1559,7 @@ with tab2:
         if len(chain_siblings) > 1:
             st.markdown("---")
             select_entire_chain = st.checkbox(
-                T(f"☑️ تحديد كامل فروع السلسلة ({len(chain_siblings)} فرع) لتوزيع المناطق عليها معاً", f"☑️ Select Entire Chain ({len(chain_siblings)} branches)"),
+                T(f"☑️ تحديد كامل فروع السلسلة ({len(chain_siblings)} فرع) لتوزيع المناطق عليها معاً", f"☑️ Select Entire Chain ({len(chain_siblings)} branches) for allocation"),
                 value=False,
                 key="select_entire_chain_chk"
             )
@@ -1498,7 +1568,7 @@ with tab2:
             is_multi = True
             vd = chain_siblings
             portal_session_key = "MULTI_" + str(found_cid)
-            st.success(T(f"✨ تم تفعيل وضع السلسلة بالكامل ({len(vd)} فرع) مع التمييز اللوني لكل فرع!", f"✨ Multi-branch chain mode active!"))
+            st.success(T(f"✨ تم تفعيل وضع السلسلة بالكامل ({len(vd)} فرع) مع التمييز اللوني لكل فرع!", f"✨ Multi-branch chain mode active for ({len(vd)}) branches!"))
         else:
             is_multi = False
             opt = dict(zip(p_vends["clean_vid"], p_vends["clean_name"] + " (" + p_vends["clean_vid"] + ")"))
@@ -1524,7 +1594,8 @@ with tab2:
                 branch_color_map[b_vid] = {
                     "name": b_row["clean_name"],
                     "hex": pal_entry.get("hex", "#28a745"),
-                    "folium": pal_entry.get("folium", "green")
+                    "folium": pal_entry.get("folium", "green"),
+                    "chain": b_row.get("clean_chain_name", "")
                 }
 
             all_known_zones = sorted([
@@ -1542,6 +1613,10 @@ with tab2:
                 if low in zlk_exact: return zlk_exact[low]
                 norm = normalize_zone_key(raw_str)
                 if norm in zlk_norm: return zlk_norm[norm]
+                for k, v in zlk_exact.items():
+                    if k in low or low in k: return v
+                for k, v in zlk_norm.items():
+                    if k in norm or norm in k: return v
                 return raw_str
 
             if st.session_state.get("portal_session_id") != portal_session_key:
@@ -1557,15 +1632,20 @@ with tab2:
                     for _, r in m_del.iterrows():
                         row_vid = str(r.get("clean_vid", "")).strip()
                         target_vid = row_vid if row_vid in vids_in_scope else list(vids_in_scope)[0]
+                        
                         raw_z = str(r.get("clean_zone", "")).strip()
                         zn = resolve_zone_name(raw_z)
                         
                         if zn and target_vid in original_alloc:
-                            try: fee_val = float(str(r.get("clean_fee", "")).strip())
+                            fee_val = 0.0
+                            raw_fee = str(r.get("clean_fee", "")).strip()
+                            try: fee_val = float(raw_fee)
                             except: fee_val = 0.0
                             raw_t = str(r.get("clean_time", "45 mins")).strip()
                             final_t = raw_t if (raw_t and raw_t.lower() not in ["", "nan", "none", "null", "-"]) else "45 mins"
-                            try: min_order_val = float(str(r.get("clean_min_order", "0.0")).strip())
+                            
+                            raw_min = str(r.get("clean_min_order", "0.0")).strip()
+                            try: min_order_val = float(raw_min)
                             except: min_order_val = 0.0
 
                             original_alloc[target_vid][zn] = {
@@ -1599,415 +1679,51 @@ with tab2:
             st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #ff5a00; margin-bottom: 8px;'>🏢 {T('أداء السلسلة بالكامل', 'Entire Chain Performance')}: <span style='color: #ffffff;'>{chain_label_name} (ID: {found_cid})</span></div>", unsafe_allow_html=True)
             
             c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-            c_kpi1.metric(T("📦 QC Net Orders (السلسلة)", "QC Net Orders (Chain)"), str(c_perf.get("qc_orders", "-")))
-            c_kpi2.metric(T("⚠️ Failed Orders (السلسلة)", "Failed Orders (Chain)"), str(c_perf.get("fail_orders", "-")), delta=T("ملغاة", "failed"), delta_color="inverse")
-            c_kpi3.metric(T("📉 Fail Rate (السلسلة)", "Fail Rate (Chain)"), str(c_perf.get("fail_rate", "-")), delta_color="inverse")
-
-            st.write("")
-            st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #28a745; margin-bottom: 8px;'>💊 {T('أداء الفرع المحدد', 'Selected Branch Performance')}: <span style='color: #ffffff;'>{active_branch_name} (ID: {active_vid})</span></div>", unsafe_allow_html=True)
-            
-            v_kpi1, v_kpi2, v_kpi3, v_kpi4 = st.columns(4)
-            v_kpi1.metric(T("📦 QC Net Orders (الفرع)", "QC Net Orders (Vendor)"), str(v_perf.get("qc_orders", "-")))
-            v_kpi2.metric(T("⚠️ Failed Orders (الفرع)", "Failed Orders (Vendor)"), str(v_perf.get("fail_orders", "-")), delta=T("ملغاة", "failed"), delta_color="inverse")
-            v_kpi3.metric(T("📉 Fail Rate (الفرع)", "Fail Rate (Vendor)"), str(v_perf.get("fail_rate", "-")), delta_color="inverse")
-            v_kpi4.metric(T("📞 Customer CR", "CR"), str(v_perf.get("fault_cr", "-")), delta_color="inverse")
-            st.markdown("---")
-
-            if len(vd) > 1:
-                st.write(T("🎨 **دليل تمييز ألوان الفروع:**", "🎨 **Branch Colors:**"))
-                n_cols = min(max(len(vd), 1), 4)
-                leg_cols = st.columns(n_cols)
-                for idx, (b_vid, b_info) in enumerate(branch_color_map.items()):
-                    with leg_cols[idx % n_cols]:
-                        zone_count = len(working_alloc.get(b_vid, {}))
-                        is_active_card = (b_vid == active_vid)
-                        border_highlight = f"3px solid {b_info['hex']}" if is_active_card else "1px solid #dee2e6"
-                        st.markdown(f"<div style='padding:5px 8px; border-radius:5px; border-left: 6px solid {b_info['hex']}; border: {border_highlight}; background: #f8f9fa; font-size:11.5px;'><b>{b_info['name']}</b> ({zone_count} منطقة)</div>", unsafe_allow_html=True)
-
-            rad = st.slider(T("نطاق الخريطة (كم):", "Radius (km):"), 3, 50, 15, key="portal_radius_slider")
-
-            all_chain_covered_zones = set()
-            for v_id, z_dict in working_alloc.items():
-                for z in z_dict:
-                    all_chain_covered_zones.add(z.strip().lower())
-                    all_chain_covered_zones.add(normalize_zone_key(z))
-
-            covered_mask = (gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(all_chain_covered_zones)) | (gdf_areas["norm_key"].isin(all_chain_covered_zones)) if not gdf_areas.empty else pd.Series(dtype=bool)
-            covered_gdf = gdf_areas[covered_mask].copy() if not gdf_areas.empty else gpd.GeoDataFrame()
-
-            valid_coords = vd.dropna(subset=["lat", "lng"])
-            if has_loc and not gdf_areas.empty and not valid_coords.empty:
-                branch_pts = MultiPoint([Point(r['lng'], r['lat']) for _, r in valid_coords.iterrows()])
-                nearby_mask = gdf_areas.geometry.intersects(branch_pts.buffer(rad / 111.0))
-                nearby_gdf = gdf_areas[nearby_mask].copy()
-                pa = pd.concat([covered_gdf, nearby_gdf]).drop_duplicates(subset=["Delivery Location Area Name"])
-            else:
-                pa = gdf_areas.copy()
-
-            zone_to_branch_owner = {}
-            for v_id, z_dict in working_alloc.items():
-                for z in z_dict:
-                    zone_to_branch_owner[z.strip().lower()] = v_id
-                    zone_to_branch_owner[normalize_zone_key(z)] = v_id
-
-            cm, cf = st.columns([6, 4])
-
-            with cm:
-                st.subheader(f"🗺️ Map ({len([z for v in working_alloc.values() for z in v])} {T('منطقة مغطاة للسلسلة', 'Covered Zones')})")
-                
-                active_row = vd[vd["clean_vid"] == active_vid]
-                if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]):
-                    mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
-                    zoom_lvl = 14
-                elif not valid_coords.empty:
-                    mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
-                    zoom_lvl = 12
-                else:
-                    mcnt = [30.0444, 31.2357]
-                    zoom_lvl = 11
-
-                vmap = folium.Map(location=mcnt, zoom_start=zoom_lvl, prefer_canvas=True)
-
-                if not valid_coords.empty:
-                    for _, rv in valid_coords.iterrows():
-                        b_id_str = str(rv["clean_vid"])
-                        b_info = branch_color_map.get(b_id_str, {"hex": "#28a745", "folium": "green"})
-                        is_active_b = (b_id_str == active_vid)
-                        popup_html = f"<div style='font-family: Arial; font-size: 11px;'><b>💊 {rv['clean_name']}</b><br>ID: {b_id_str}<br>المناطق: {len(working_alloc.get(b_id_str, {}))}</div>"
-
-                        folium.Marker(
-                            [rv["lat"], rv["lng"]],
-                            tooltip=f"💊 {rv['clean_name']} ({b_id_str})",
-                            popup=folium.Popup(popup_html, max_width=220),
-                            icon=folium.Icon(color="red" if is_active_b else b_info.get("folium", "green"), icon="medkit", prefix="fa")
-                        ).add_to(vmap)
-
-                selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
-
-                if not pa.empty:
-                    def get_portal_zone_styling(feature):
-                        z_name = str(feature["properties"].get("Delivery Location Area Name", "")).strip()
-                        z_low = z_name.lower()
-                        z_norm = normalize_zone_key(z_name)
-                        is_clicked_target = (z_low == selected_zone_in_state or z_norm == selected_zone_in_state) and selected_zone_in_state != ""
-                        
-                        owner_vid = zone_to_branch_owner.get(z_low) or zone_to_branch_owner.get(z_norm)
-                        if owner_vid:
-                            b_hex = branch_color_map.get(owner_vid, {}).get("hex", "#28a745")
-                            is_active_owner = (owner_vid == active_vid)
-                            return {
-                                "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#000000" if is_clicked_target else b_hex,
-                                "weight": 4.5 if is_clicked_target else (3.0 if is_active_owner else 1.2),
-                                "fillOpacity": 0.85 if is_clicked_target else (0.6 if is_active_owner else 0.3)
-                            }
-                        return {
-                            "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#000000" if is_clicked_target else "#4a5568",
-                            "weight": 3.5 if is_clicked_target else 1.0,
-                            "fillOpacity": 0.75 if is_clicked_target else 0.08
-                        }
-
-                    folium.GeoJson(
-                        pa[["Delivery Location Area Name", "geometry"]].to_json(),
-                        style_function=get_portal_zone_styling,
-                        tooltip=folium.GeoJsonTooltip(fields=["Delivery Location Area Name"], aliases=[T("المنطقة: ", "Zone: ")])
-                    ).add_to(vmap)
-
-                mcd = st_folium(
-                    vmap,
-                    width="100%",
-                    height=540,
-                    key=f"vmap_portal_{portal_session_key}_{active_vid}_{rad}",
-                    returned_objects=["last_object_clicked"]
+            with c_kpi1:
+                st.metric(
+                    label=T("📦 QC Net Orders (السلسلة)", "QC Net Orders (Chain)"),
+                    value=str(c_perf.get("qc_orders", "-"))
+                )
+            with c_kpi2:
+                st.metric(
+                    label=T("⚠️ Vendor Net Failed Orders (السلسلة)", "Failed Orders (Chain)"),
+                    value=str(c_perf.get("fail_orders", "-")),
+                    delta=T("ملغاة", "failed"),
+                    delta_color="inverse"
+                )
+            with c_kpi3:
+                st.metric(
+                    label=T("📉 Vendor Net Fail Rate (السلسلة)", "Fail Rate (Chain)"),
+                    value=str(c_perf.get("fail_rate", "-")),
+                    delta_color="inverse"
                 )
 
-                clicked_zone, click_sig = extract_clicked_zone_direct(mcd, pa, all_known_zones)
-                if click_sig and click_sig != st.session_state.get("last_poly_click_sig"):
-                    st.session_state["last_poly_click_sig"] = click_sig
-                    if clicked_zone:
-                        st.session_state["portal_selected_zone"] = clicked_zone
-                        st.session_state["just_clicked_map_zone"] = clicked_zone
-                        st.session_state["portal_show_diff"] = False
-                        st.rerun()
-
-            with cf:
-                st.subheader(T("🛠️ لوحة تعديل المناطق والتسعير", "🛠️ Zone & Pricing Control Panel"))
-                
-                if len(vd) > 1:
-                    branch_select_opts = {v: f"{branch_names[v]} ({v})" for v in branch_names.keys()}
-                    branch_keys_list = list(branch_select_opts.keys())
-                    current_idx = branch_keys_list.index(active_vid) if active_vid in branch_keys_list else 0
-                    
-                    selected_branch_key = st.selectbox(
-                        T("🏬 اختر الفرع المستهدف للتعديل:", "🏬 Target Branch:"),
-                        options=branch_keys_list,
-                        index=current_idx,
-                        format_func=lambda x: branch_select_opts[x],
-                        key="portal_active_branch_select"
-                    )
-                    if selected_branch_key != active_vid:
-                        st.session_state["portal_active_vid"] = selected_branch_key
-                        st.session_state["portal_selected_zone"] = ""
-                        st.rerun()
-
-                # ميزة رفع ملف إكسيل / CSV مجمع (Bulk Upload)
-                with st.expander(T("📂 رفع ملف إكسيل / CSV مجمع للمناطق (Bulk Upload)", "📂 Bulk Upload CSV / Excel"), expanded=False):
-                    sample_template_df = pd.DataFrame([
-                        {"Vendor ID": active_vid, "Zone": all_known_zones[0] if all_known_zones else "Dokki", "Delivery Time": "45 mins", "Delivery Fees": 25.0, "Minimum Order Amount": 0.0},
-                        {"Vendor ID": active_vid, "Zone": all_known_zones[1] if len(all_known_zones) > 1 else "Mohandessin", "Delivery Time": "30 mins", "Delivery Fees": 20.0, "Minimum Order Amount": 50.0}
-                    ])
-                    st.download_button(
-                        T("📥 تحميل نموذج ملف فارغ (Download Template)", "📥 Download Template CSV"),
-                        data=sample_template_df.to_csv(index=False).encode('utf-8-sig'),
-                        file_name="zones_upload_template.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                    
-                    uploaded_bulk_file = st.file_uploader(
-                        T("اختر ملف الإكسيل أو الـ CSV:", "Choose File:"),
-                        type=["csv", "xlsx", "xls"],
-                        key=f"bulk_upload_file_input_{portal_session_key}"
-                    )
-                    
-                    if uploaded_bulk_file is not None:
-                        if st.button(T("🚀 استيراد وتحديث الخريطة فوراً", "🚀 Import & Update Map"), type="primary", use_container_width=True):
-                            try:
-                                up_df = pd.read_csv(uploaded_bulk_file) if uploaded_bulk_file.name.endswith(".csv") else pd.read_excel(uploaded_bulk_file)
-                                c_zone = robust_get_col(up_df, ["Zone", "Zone Name", "Area", "Area Name", "Delivery Location Area Name", "المنطقة"])
-                                c_time = robust_get_col(up_df, ["Delivery Time", "Time", "Duration", "وقت التوصيل"])
-                                c_fee = robust_get_col(up_df, ["Delivery Fees", "Delivery Fee", "Fee", "Fees", "السعر"])
-                                c_min = robust_get_col(up_df, ["Minimum Order Amount", "Minimum Amount", "Min Order", "الحد الأدنى"])
-                                c_vid = robust_get_col(up_df, ["Vendor ID", "Vendor Id", "VendorID", "كود الفرع"])
-                                
-                                if c_zone:
-                                    allowed_vids = set(branch_names.keys())
-                                    imported_count = 0
-                                    for _, r_up in up_df.iterrows():
-                                        t_vid_row = active_vid
-                                        if c_vid and pd.notna(r_up[c_vid]):
-                                            cand_v = normalize_id(r_up[c_vid])
-                                            if cand_v in allowed_vids: t_vid_row = cand_v
-                                        
-                                        matched_zone = resolve_zone_name(str(r_up[c_zone]).strip())
-                                        if matched_zone:
-                                            r_t = str(r_up[c_time]).strip() if (c_time and pd.notna(r_up[c_time])) else "45 mins"
-                                            try: r_f = min(max(float(r_up[c_fee]), 0.0), 35.0) if (c_fee and pd.notna(r_up[c_fee])) else 25.0
-                                            except: r_f = 25.0
-                                            try: r_m = max(float(r_up[c_min]), 0.0) if (c_min and pd.notna(r_up[c_min])) else 0.0
-                                            except: r_m = 0.0
-
-                                            for ov in working_alloc:
-                                                if ov != t_vid_row and matched_zone in working_alloc[ov]:
-                                                    del working_alloc[ov][matched_zone]
-                                                    
-                                            if t_vid_row not in working_alloc: working_alloc[t_vid_row] = {}
-                                            working_alloc[t_vid_row][matched_zone] = {"time": r_t, "fee": r_f, "min_order": r_m}
-                                            imported_count += 1
-                                            
-                                    st.session_state["portal_working_alloc"] = working_alloc
-                                    st.session_state["portal_show_diff"] = True
-                                    st.success(T(f"🎉 تم استيراد {imported_count} منطقة وتحديث الخريطة بنجاح!", f"🎉 Imported {imported_count} zones!"))
-                                    st.rerun()
-                            except Exception as e:
-                                st.error(f"خطأ أثناء قراءة الملف: {e}")
-
-                st.markdown("---")
-                opt_edit = T("✏️ تعديل الوقت والرسوم لمناطق حالية", "✏️ Edit Time & Fees")
-                opt_add = T("➕ إضافة منطقة لهذا الفرع", "➕ Add Zone to Branch")
-                opt_del = T("🗑️ إزالة منطقة من هذا الفرع", "🗑️ Remove Zone from Branch")
-
-                active_branch_zones = working_alloc.get(active_vid, {})
-                active_zones_keys = sorted(list(active_branch_zones.keys()))
-                available_to_add = sorted([z for z in all_known_zones if z not in active_zones_keys])
-
-                just_clicked = st.session_state.pop("just_clicked_map_zone", None)
-                if just_clicked:
-                    if just_clicked in active_zones_keys:
-                        st.session_state["portal_action_mode_radio"] = opt_edit
-                        st.session_state["portal_edit_zone_select"] = just_clicked
-                    elif just_clicked in available_to_add:
-                        st.session_state["portal_action_mode_radio"] = opt_add
-                        st.session_state["portal_add_zone_select"] = just_clicked
-
-                action_mode = st.radio(T("أو اختر تعديلاً يدوياً:", "Action:"), [opt_edit, opt_add, opt_del], key="portal_action_mode_radio")
-
-                if "تعديل" in action_mode or "Edit" in action_mode:
-                    if active_zones_keys:
-                        selected_edit_zone = st.selectbox(T("اسم المنطقة المراد تعديلها:", "Zone to Edit:"), active_zones_keys, key="portal_edit_zone_select")
-                        st.session_state["portal_selected_zone"] = selected_edit_zone
-                        cur_z = active_branch_zones.get(selected_edit_zone, {})
-                        
-                        c_t1, c_t2, c_t3 = st.columns(3)
-                        with c_t1:
-                            edit_time_val = st.selectbox(T("وقت التوصيل المقترح:", "Delivery Time:"), DELIVERY_TIME_CHOICES, index=5, key=f"et_{selected_edit_zone}")
-                        with c_t2:
-                            edit_fee_val = st.number_input(T("رسوم التوصيل (EGP):", "Fee:"), min_value=0.0, max_value=35.0, value=float(cur_z.get("fee", 25.0)), step=1.0, key=f"ef_{selected_edit_zone}")
-                        with c_t3:
-                            edit_min_order_val = st.number_input(T("الحد الأدنى للطلب (EGP):", "Min Order:"), min_value=0.0, value=float(cur_z.get("min_order", 0.0)), step=5.0, key=f"em_{selected_edit_zone}")
-
-                        if st.button(T("💾 حفظ تعديل المنطقة", "💾 Save Zone Update"), type="primary", use_container_width=True):
-                            working_alloc[active_vid][selected_edit_zone] = {"time": str(edit_time_val), "fee": float(edit_fee_val), "min_order": float(edit_min_order_val)}
-                            st.session_state["portal_working_alloc"] = working_alloc
-                            st.session_state["portal_show_diff"] = True
-                            st.rerun()
-
-                elif "إضافة" in action_mode or "Add" in action_mode:
-                    if available_to_add:
-                        selected_add_zone = st.selectbox(T("اسم المنطقة المراد إضافتها:", "Zone to Add:"), available_to_add, key="portal_add_zone_select")
-                        st.session_state["portal_selected_zone"] = selected_add_zone
-                        
-                        c_a1, c_a2, c_a3 = st.columns(3)
-                        with c_a1:
-                            add_time_val = st.selectbox(T("وقت التوصيل المقترح:", "Delivery Time:"), DELIVERY_TIME_CHOICES, index=5, key=f"at_{selected_add_zone}")
-                        with c_a2:
-                            add_fee_val = st.number_input(T("رسوم التوصيل (EGP):", "Fee:"), min_value=0.0, max_value=35.0, value=25.0, step=1.0, key=f"af_{selected_add_zone}")
-                        with c_a3:
-                            add_min_order_val = st.number_input(T("الحد الأدنى للطلب (EGP):", "Min Order:"), min_value=0.0, value=0.0, step=5.0, key=f"am_{selected_add_zone}")
-
-                        if st.button(T("➕ تأكيد إضافة المنطقة لهذا الفرع", "➕ Add Zone"), type="primary", use_container_width=True):
-                            working_alloc[active_vid][selected_add_zone] = {"time": str(add_time_val), "fee": float(add_fee_val), "min_order": float(add_min_order_val)}
-                            st.session_state["portal_working_alloc"] = working_alloc
-                            st.session_state["portal_show_diff"] = True
-                            st.rerun()
-
-                elif "إزالة" in action_mode or "Remove" in action_mode:
-                    if active_zones_keys:
-                        selected_remove_zone = st.selectbox(T("اسم المنطقة المراد إزالتها:", "Zone to Remove:"), active_zones_keys, key="portal_remove_zone_select")
-                        if st.button(T(f"🗑️ تأكيد إزالة ({selected_remove_zone})", f"🗑️ Remove"), type="secondary", use_container_width=True):
-                            if selected_remove_zone in working_alloc[active_vid]:
-                                del working_alloc[active_vid][selected_remove_zone]
-                            st.session_state["portal_working_alloc"] = working_alloc
-                            st.session_state["portal_show_diff"] = True
-                            st.rerun()
-
-                st.markdown("---")
-                btn_c1, btn_c2 = st.columns(2)
-                with btn_c1:
-                    if st.button(T("👁️ تحديث الخريطة (Apply)", "👁️ Apply"), use_container_width=True):
-                        st.session_state["portal_show_diff"] = False
-                        st.rerun()
-                with btn_c2:
-                    if st.button(T("🚀 تأكيد وتسعير (Submit)", "🚀 Submit Selection"), type="primary", use_container_width=True):
-                        st.session_state["portal_show_diff"] = True
-                        st.rerun()
-
-            # جدول مراجعة التعديلات
-            if st.session_state.get("portal_show_diff"):
-                st.markdown("---")
-                st.subheader(T("💰 جدول مراجعة التعديلات المعتمدة", "💰 Review Table"))
-                
-                diff_rows = []
-                for v_id in (set(orig_alloc.keys()) | set(working_alloc.keys())):
-                    b_lbl = f"{branch_names.get(v_id, v_id)} ({v_id})"
-                    o_zones, w_zones = orig_alloc.get(v_id, {}), working_alloc.get(v_id, {})
-
-                    for z in o_zones:
-                        if z not in w_zones:
-                            diff_rows.append({
-                                "Discard": False, "Vendor ID": v_id, "Branch Name": branch_names.get(v_id, v_id),
-                                "Assigned Branch": b_lbl, "Zone": z, "Distance (km)": calc_vendor_zone_distance(v_id, z, df_vendors, gdf_areas),
-                                "Change Type": T("🗑️ إزالة", "Removal"), "Status": T("مسجلة", "Existing"), "Action": T("إلغاء التفعيل", "Deactivate"),
-                                "Delivery Time": o_zones[z].get("time", "-"), "Delivery Fees (EGP)": float(o_zones[z].get("fee", 0.0)),
-                                "Minimum Order (EGP)": float(o_zones[z].get("min_order", 0.0))
-                            })
-
-                    for z, w_item in w_zones.items():
-                        dist_calc = calc_vendor_zone_distance(v_id, z, df_vendors, gdf_areas)
-                        if z not in o_zones:
-                            diff_rows.append({
-                                "Discard": False, "Vendor ID": v_id, "Branch Name": branch_names.get(v_id, v_id),
-                                "Assigned Branch": b_lbl, "Zone": z, "Distance (km)": dist_calc,
-                                "Change Type": T("✨ إضافة", "New Addition"), "Status": T("جديدة", "New"), "Action": T("نشط", "Active"),
-                                "Delivery Time": str(w_item.get("time", "45 mins")), "Delivery Fees (EGP)": float(w_item.get("fee", 25.0)),
-                                "Minimum Order (EGP)": float(w_item.get("min_order", 0.0))
-                            })
-                        elif (o_zones[z] != w_item):
-                            diff_rows.append({
-                                "Discard": False, "Vendor ID": v_id, "Branch Name": branch_names.get(v_id, v_id),
-                                "Assigned Branch": b_lbl, "Zone": z, "Distance (km)": dist_calc,
-                                "Change Type": T("✏️ تعديل", "Update"), "Status": T("محدثة", "Updated"), "Action": "Edit",
-                                "Delivery Time": str(w_item.get("time", "")), "Delivery Fees (EGP)": float(w_item.get("fee", 0.0)),
-                                "Minimum Order (EGP)": float(w_item.get("min_order", 0.0))
-                            })
-
-                if diff_rows:
-                    diff_df = pd.DataFrame(diff_rows)
-                    edited_diff = st.data_editor(
-                        diff_df.drop(columns=["Vendor ID", "Branch Name"], errors="ignore"),
-                        hide_index=True,
-                        use_container_width=True,
-                        key="diff_editor_tbl"
-                    )
-                    
-                    if st.button(T("✅ اعتماد التعديلات وحفظها في Firebase", "✅ Finalize & Save to Firebase"), type="primary", use_container_width=True):
-                        for v_id in diff_df["Vendor ID"].unique():
-                            b_vname = diff_df[diff_df["Vendor ID"] == v_id]["Branch Name"].iloc[0]
-                            b_sub = edited_diff.loc[diff_df[diff_df["Vendor ID"] == v_id].index].copy()
-                            b_sub["Final_Status"] = "Updated"
-                            b_sub["Action"] = "Active"
-                            b_sub["Classification"] = "Vendor Zone Update"
-                            
-                            saved_recs = save_detailed_request(v_id, b_vname, b_sub)
-                            send_request_emails(v_id, b_vname, saved_recs, current_user.get("email", ""))
-
-                        st.session_state["submission_success_msg"] = T("🎉 تم توثيق واعتماد التعديلات بنجاح في Firebase!", "🎉 Saved successfully!")
-                        st.session_state["portal_show_diff"] = False
-                        st.session_state["portal_orig_alloc"] = copy.deepcopy(st.session_state["portal_working_alloc"])
-                        st.rerun()
-
-# ==========================================
-# Tab 3: Incoming Requests (الطلبات الواردة)
-# ==========================================
-if is_admin:
-    with tab3:
-        st.header(T("📥 طلبات التسعير والتغطية الواردة من الفروع", "📥 Pricing & Coverage Requests"))
-        raw_df = get_all_requests_df()
-
-        if not raw_df.empty and "Zone" in raw_df.columns:
-            st.dataframe(raw_df, use_container_width=True, hide_index=True)
-            csv_bytes = raw_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                T(f"📥 تحميل جميع الطلبات كملف CSV ({len(raw_df)} منطقة)", f"📥 Download CSV ({len(raw_df)} zones)"),
-                data=csv_bytes,
-                file_name=f"All_Pricing_Requests_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                type="primary"
-            )
-        else:
-            st.info(T("📭 لا توجد طلبات جديدة واردة حالياً من الفروع.", "📭 No incoming requests found."))
-
-# ==========================================
-# Tab 4: Users Management & Settings
-# ==========================================
-if is_master_admin:
-    with tab4:
-        st.header(T("👥 إدارة المستخدمين والصلاحيات وإعدادات السحابة", "👥 Users & System Settings"))
-        
-        tab_u1, tab_u2, tab_u3 = st.tabs([
-            T("📋 قائمة المستخدمين", "📋 Users List"),
-            T("➕ إضافة مستخدم جديد", "➕ Add User"),
-            T("⚡ فحص اتصال Firebase و SMTP", "⚡ Test Firebase & SMTP")
-        ])
-
-        with tab_u1:
-            users_list_df = get_users_df()
-            st.dataframe(users_list_df, use_container_width=True, hide_index=True)
-
-        with tab_u2:
-            new_email = st.text_input(T("البريد الإلكتروني:", "Email:")).strip().lower()
-            new_password = st.text_input(T("كلمة المرور:", "Password:"), type="password").strip()
-            u_role = st.selectbox(T("نوع الحساب:", "Role:"), ["vendor", "admin"])
+            st.write("")
+            st.markdown(f"<div style='font-size: 15px; font-weight: 800; color: #28a745; margin-bottom: 8px;'>💊 {T('أداء الفرع المحدد حالياً', 'Selected Branch Performance')}: <span style='color: #ffffff;'>{active_branch_name} (ID: {active_vid})</span></div>", unsafe_allow_html=True)
             
-            if st.button(T("💾 إنشاء الحساب الآن", "💾 Create User"), type="primary"):
-                if new_email and new_password:
-                    ok, msg = add_user(new_email, new_password, u_role, "all", "all", current_user_dict=current_user)
-                    if ok: st.success(msg); st.rerun()
-                    else: st.error(msg)
-
-        with tab_u3:
-            if st.button(T("🧪 اختبار الاتصال بـ Firebase الآن", "🧪 Test Firebase"), type="primary"):
-                ok_db, msg_db = test_firebase_connection()
-                if ok_db: st.success(f"✅ {msg_db}")
-                else: st.error(f"❌ {msg_db}")
+            v_kpi1, v_kpi2, v_kpi3, v_kpi4 = st.columns(4)
+            with v_kpi1:
+                st.metric(
+                    label=T("📦 QC Net Orders (الفرع)", "QC Net Orders (Vendor)"),
+                    value=str(v_perf.get("qc_orders", "-"))
+                )
+            with v_kpi2:
+                st.metric(
+                    label=T("⚠️ Vendor Net Failed Orders (الفرع)", "Failed Orders (Vendor)"),
+                    value=str(v_perf.get("fail_orders", "-")),
+                    delta=T("ملغاة", "failed"),
+                    delta_color="inverse"
+                )
+            with v_kpi3:
+                st.metric(
+                    label=T("📉 Vendor Net Fail Rate (الفرع)", "Fail Rate (Vendor)"),
+                    value=str(v_perf.get("fail_rate", "-")),
+                    delta_color="inverse"
+                )
+            with v_kpi4:
+                st.metric(
+                    label=T("📞 Vendor Fault Customer CR", "Vendor Fault CR"),
+                    value=str(v_perf.get("fault_cr", "-")),
+                    delta_color="inverse"
+                )
+            st.markdown("---")
