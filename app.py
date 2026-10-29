@@ -1929,13 +1929,13 @@ with tab2:
                 active_row = vd[vd["clean_vid"] == active_vid]
                 if not active_row.empty and pd.notna(active_row.iloc[0]["lat"]) and pd.notna(active_row.iloc[0]["lng"]):
                     mcnt = [float(active_row.iloc[0]["lat"]), float(active_row.iloc[0]["lng"])]
-                    zoom_lvl = 13  # زوم واسع وشامل
+                    zoom_lvl = 12  # زوم واسع وشامل
                 elif not valid_coords.empty:
                     mcnt = [float(valid_coords["lat"].mean()), float(valid_coords["lng"].mean())]
-                    zoom_lvl = 11
+                    zoom_lvl = 12
                 else:
                     mcnt = [30.0444, 31.2357]
-                    zoom_lvl = 11
+                    zoom_lvl = 12
 
                 vmap = folium.Map(location=mcnt, zoom_start=zoom_lvl, prefer_canvas=True)
 
