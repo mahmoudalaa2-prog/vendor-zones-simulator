@@ -845,7 +845,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
         if smtp_port == 465:
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=12)
         else:
-            server = smtplib.SMTP(server_host, smtp_port, timeout=12)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=12)
             server.ehlo()
             server.starttls()
             server.ehlo()
