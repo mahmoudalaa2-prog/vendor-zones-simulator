@@ -59,9 +59,11 @@ button[kind="primary"], .stButton > button[kind="primary"] {
     box-shadow: 0 4px 14px rgba(255, 90, 0, 0.35) !important;
 }
 button[kind="secondary"], .stButton > button[kind="secondary"] {
-    border: 1px solid rgba(255, 90, 0, 0.4) !important;
+    border: 1.5px solid rgba(255, 90, 0, 0.5) !important;
     border-radius: 9px !important;
-    color: #e2e8f0 !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
 }
 button[data-baseweb="tab"][aria-selected="true"] {
     color: #ff5a00 !important;
@@ -73,6 +75,18 @@ section[data-testid="stSidebar"] {
     border-left: 1px solid rgba(255, 90, 0, 0.2) !important;
     border-right: 1px solid rgba(255, 90, 0, 0.2) !important;
     background: linear-gradient(180deg, rgba(255, 90, 0, 0.06) 0%, rgba(14, 17, 23, 0) 100%) !important;
+}
+/* أزرار السايدبار فائقة الوضوح */
+section[data-testid="stSidebar"] button {
+    background: rgba(255, 90, 0, 0.12) !important;
+    border: 1.5px solid #ff5a00 !important;
+    color: #ff7700 !important;
+    font-weight: 800 !important;
+    border-radius: 9px !important;
+}
+section[data-testid="stSidebar"] button:hover {
+    background: #ff5a00 !important;
+    color: #ffffff !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -709,25 +723,65 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
     v_match = df_p[df_p["clean_vid"] == str(vid)]
     if not v_match.empty: v_perf = v_match.iloc[0].to_dict()
         
+    def safe_num(v):
+        if pd.isna(v): return 0.0
+        try: return float(str(v).replace(",", "").replace("%", "").strip())
+        except: return 0.0
+
     if cid:
-        c_match = df_p[df_p["clean_cid"] == str(cid)]
+        c_match = df_p[df_p["clean_cid"] == str(cid)].copy()
         if not c_match.empty:
+            c_vendors_match = c_match[c_match["clean_vid"] != ""]
             c_summary = c_match[c_match["clean_vid"] == ""]
-            if not c_summary.empty:
-                c_perf = c_summary.iloc[0].to_dict()
+            
+            qc_sum = sum(safe_num(x) for x in c_vendors_match["qc_orders"]) if not c_vendors_match.empty else 0.0
+            fail_sum = sum(safe_num(x) for x in c_vendors_match["fail_orders"]) if not c_vendors_match.empty else 0.0
+            
+            summary_qc = safe_num(c_summary["qc_orders"].iloc[0]) if not c_summary.empty else 0.0
+            summary_fail = safe_num(c_summary["fail_orders"].iloc[0]) if not c_summary.empty else 0.0
+
+            # إذا كانت السلسلة فرع واحد أو صف السلسلة يحتوي على 0 أوردر، اعتمد بيانات الفرع فوراً
+            if summary_qc > 0 and len(c_vendors_match) > 1:
+                final_qc = summary_qc
+                final_fail = summary_fail
+                cr_val = c_summary["contact_rate"].iloc[0] if "contact_rate" in c_summary.columns else "-"
+                fault_val = c_summary["fault_cr"].iloc[0] if "fault_cr" in c_summary.columns else "-"
+            elif qc_sum > 0:
+                final_qc = qc_sum
+                final_fail = fail_sum
+                cr_val = c_vendors_match["contact_rate"].iloc[0] if "contact_rate" in c_vendors_match.columns else "-"
+                fault_val = c_vendors_match["fault_cr"].iloc[0] if "fault_cr" in c_vendors_match.columns else "-"
+            elif v_perf and safe_num(v_perf.get("qc_orders", 0)) > 0:
+                final_qc = safe_num(v_perf.get("qc_orders", 0))
+                final_fail = safe_num(v_perf.get("fail_orders", 0))
+                cr_val = v_perf.get("contact_rate", "-")
+                fault_val = v_perf.get("fault_cr", "-")
             else:
-                try:
-                    qc_sum = pd.to_numeric(c_match["qc_orders"], errors="coerce").sum()
-                    fail_sum = pd.to_numeric(c_match["fail_orders"], errors="coerce").sum()
-                    c_perf = {
-                        "qc_orders": int(qc_sum) if pd.notna(qc_sum) else "-",
-                        "fail_orders": int(fail_sum) if pd.notna(fail_sum) else "-",
-                        "fail_rate": f"{(fail_sum / qc_sum * 100):.1f}%" if (qc_sum and qc_sum > 0) else "-",
-                        "contact_rate": c_match["contact_rate"].iloc[0] if "contact_rate" in c_match.columns else "-",
-                        "fault_cr": c_match["fault_cr"].iloc[0] if "fault_cr" in c_match.columns else "-"
-                    }
-                except:
-                    c_perf = c_match.iloc[0].to_dict()
+                final_qc = summary_qc
+                final_fail = summary_fail
+                cr_val = "-"
+                fault_val = "-"
+
+            final_rate = f"{(final_fail / final_qc * 100):.2f}%" if (final_qc and final_qc > 0) else "-"
+
+            c_perf = {
+                "qc_orders": f"{int(final_qc):,}" if final_qc > 0 else ("0" if final_fail > 0 and final_qc == 0 else "-"),
+                "fail_orders": f"{int(final_fail):,}" if final_fail >= 0 else "-",
+                "fail_rate": final_rate,
+                "contact_rate": str(cr_val) if cr_val not in [None, "nan", "None"] else "-",
+                "fault_cr": str(fault_val) if fault_val not in [None, "nan", "None"] else "-"
+            }
+            
+            # إذا كانت السلسلة فرع واحد فقط، انسخ مؤشرات الفرع بدقة كاملة
+            if v_perf and (final_qc == 0 or len(c_vendors_match) <= 1):
+                v_qc_num = safe_num(v_perf.get("qc_orders", 0))
+                if v_qc_num > 0:
+                    c_perf["qc_orders"] = v_perf.get("qc_orders")
+                    c_perf["fail_orders"] = v_perf.get("fail_orders")
+                    c_perf["fail_rate"] = v_perf.get("fail_rate")
+                    c_perf["contact_rate"] = v_perf.get("contact_rate")
+                    c_perf["fault_cr"] = v_perf.get("fault_cr")
+
     return v_perf, c_perf
 
 # ==========================================
@@ -1302,7 +1356,13 @@ with st.sidebar:
         st.session_state["last_sync_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
         st.rerun()
         
-    st.caption(f"🕒 **{T('تاريخ آخر مزامنة', 'Last Synced')}:** `{st.session_state['last_sync_time']}`")
+    st.markdown(
+        f"""<div style='background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 90, 0, 0.25); padding: 8px; border-radius: 8px; font-size: 11.5px; color: #c9d1d9; text-align: center; margin: 8px 0;'>
+            🕒 <b>{T('تاريخ آخر مزامنة', 'Last Synced')}:</b><br>
+            <span style='color: #ff5a00; font-weight: bold; font-family: monospace;'>{st.session_state['last_sync_time']}</span>
+        </div>""",
+        unsafe_allow_html=True
+    )
     st.markdown("---")
     if st.button(T("🚪 تسجيل الخروج (Logout)", "🚪 Logout"), use_container_width=True):
         st.session_state.clear()
@@ -1868,6 +1928,7 @@ with tab2:
                 )
             st.markdown("---")
 
+            # عرض دليل تمييز ألوان الفروع في السلسلة بتصميم داكن متناسق ونصوص واضحة جداً
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -1876,14 +1937,20 @@ with tab2:
                     with leg_cols[idx % n_cols]:
                         zone_count = len(working_alloc.get(b_vid, {}))
                         is_active_card = (b_vid == active_vid)
-                        border_highlight = f"3px solid {b_info['hex']}" if is_active_card else "1px solid #dee2e6"
-                        bg_highlight = "#e8f4fd" if is_active_card else "#f8f9fa"
-                        badge_tag = "<b style='color:#ff5a00;'>🎯 الفرع المحدد</b><br>" if is_active_card else "<br>"
+                        
+                        border_css = f"2px solid #ff5a00" if is_active_card else "1px solid rgba(255, 90, 0, 0.25)"
+                        bg_css = "rgba(255, 90, 0, 0.12)" if is_active_card else "rgba(255, 255, 255, 0.03)"
+                        badge_tag = "<div style='display:inline-block; background: #ff5a00; color: #ffffff; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-top: 4px;'>🎯 الفرع المحدد حالياً</div>" if is_active_card else ""
+                        
                         st.markdown(
-                            f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 6px solid {b_info['hex']}; border: {border_highlight}; background: {bg_highlight}; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
-                            f"<b>{b_info['name']}</b> ({zone_count} منطقة){badge_tag}"
-                            f"<span style='color:gray;'>Vendor ID: {b_vid}</span>"
-                            f"</div>",
+                            f"""<div style='padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; border: {border_css}; border-right: 5px solid {b_info["hex"]}; background: {bg_css}; box-shadow: 0 4px 12px rgba(0,0,0,0.2); direction: rtl; text-align: right;'>
+                                <div style='color: #ffffff; font-size: 12.5px; font-weight: 800; line-height: 1.4;'>{b_info["name"]}</div>
+                                <div style='display: flex; justify-content: space-between; align-items: center; margin-top: 4px;'>
+                                    <span style='color: #8b949e; font-size: 11px; font-family: monospace;'>ID: {b_vid}</span>
+                                    <span style='color: #ff5a00; font-size: 11px; font-weight: 700;'>({zone_count} منطقة)</span>
+                                </div>
+                                {badge_tag}
+                            </div>""",
                             unsafe_allow_html=True
                         )
 
@@ -1927,7 +1994,7 @@ with tab2:
 
                 active_row = vd[vd["clean_vid"] == active_vid]
                 
-                # حساب النطاق الجغرافي المشترك للفرع ومناطقه لتوسيطهما معاً بدقة وبزوم مريح
+                # حساب النطاق الجغرافي المشترك للفرع ومناطقه لتوسيطهما معاً بدقة وبزوم متوازن (12)
                 active_z_names = set(k.strip().lower() for k in working_alloc.get(active_vid, {}).keys())
                 branch_zones_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(active_z_names)] if not gdf_areas.empty else gpd.GeoDataFrame()
 
@@ -1977,6 +2044,7 @@ with tab2:
                 selected_zone_in_state = st.session_state.get("portal_selected_zone", "").strip().lower()
 
                 if not pa.empty:
+                    # تلوين حدود كل منطقة باللون البرتقالي الصريح (#ff5a00)
                     def get_portal_zone_styling(feature):
                         z_name = str(feature["properties"].get("Delivery Location Area Name", "")).strip()
                         z_low = z_name.lower()
@@ -1990,14 +2058,14 @@ with tab2:
                             
                             return {
                                 "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#000000" if is_clicked_target else b_hex,
-                                "weight": 4.5 if is_clicked_target else (3.0 if is_active_owner else 1.2),
-                                "fillOpacity": 0.85 if is_clicked_target else (0.6 if is_active_owner else 0.3)
+                                "color": "#000000" if is_clicked_target else "#ff5a00",  # حدود برتقالية واضحة
+                                "weight": 4.0 if is_clicked_target else (2.8 if is_active_owner else 1.8),
+                                "fillOpacity": 0.85 if is_clicked_target else (0.55 if is_active_owner else 0.25)
                             }
                         return {
                             "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#000000" if is_clicked_target else "#4a5568",
-                            "weight": 3.5 if is_clicked_target else 1.0,
+                            "color": "#000000" if is_clicked_target else "#ff5a00",  # حدود برتقالية واضحة
+                            "weight": 3.0 if is_clicked_target else 1.5,
                             "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
 
@@ -2010,7 +2078,6 @@ with tab2:
                         )
                     ).add_to(vmap)
 
-                # قفل الاستجابة على النقر فقط لمنع أي ريفريش أثناء تحريك/سحب الخريطة
                 mcd = st_folium(
                     vmap,
                     width="100%",
@@ -2229,7 +2296,7 @@ with tab2:
 
                         raw_min = cur_z_info.get("min_order", 0.0)
                         try: curr_min = float(raw_min)
-                        except: curr_min = 0.0
+                        except: min_order_val = 0.0
                         curr_min = max(curr_min, 0.0)
 
                         time_idx = DELIVERY_TIME_CHOICES.index(curr_time) if curr_time in DELIVERY_TIME_CHOICES else 5
