@@ -197,10 +197,10 @@ def test_smtp_connection(server_host, port_num, sender, password, recipient):
         msg["From"] = f"Talabat Operations Hub <{sender}>"
         msg["To"] = recipient
 
-        if int(port_num) == 465:
-            server = smtplib.SMTP_SSL(server_host, int(port_num), timeout=12)
+if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=12)
         else:
-            server = smtplib.SMTP(server_host, int(port_num), timeout=12)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=12) 
             server.ehlo()
             server.starttls()
             server.ehlo()
