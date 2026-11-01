@@ -27,7 +27,7 @@ from firebase_admin import credentials, firestore
 # ==========================================
 # 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
 # ==========================================
-st.set_page_config(layout="wide", page_title="Pharmacy & Zones Management", page_icon="💊")
+st.set_page_config(layout="wide", page_title="Pharmacy Coverage Simulator", page_icon="💊")
 
 st.markdown("""
 <style>
@@ -681,6 +681,11 @@ def load_data():
         else: gdf_a = gpd.GeoDataFrame()
     else: gdf_a = gpd.GeoDataFrame()
 
+    expected_v_cols = ["clean_vid", "clean_cid", "clean_name", "clean_chain_name", "clean_city", "clean_am", "clean_active", "clean_hidden", "lat", "lng"]
+    for col in expected_v_cols:
+        if col not in df_v.columns:
+            df_v[col] = ""
+
     return df_v, gdf_a, df_d, df_p
 
 df_vendors, gdf_areas, df_delivery, df_performance = load_data()
@@ -795,7 +800,6 @@ def get_vendor_and_chain_perf(vid, cid, df_p):
                 "fault_cr": str(fault_val) if fault_val not in [None, "nan", "None"] else "-"
             }
             
-            # إذا كانت السلسلة فرع واحد فقط، انسخ مؤشرات الفرع بدقة كاملة
             if v_perf and (final_qc == 0 or len(c_vendors_match) <= 1):
                 v_qc_num = safe_num(v_perf.get("qc_orders", 0))
                 if v_qc_num > 0:
@@ -1060,11 +1064,13 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             </body>
             </html>
             """
+
             msg_vendor = MIMEMultipart()
             msg_vendor['Subject'] = vendor_subject
             msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
             msg_vendor['To'] = submitted_by_email
             msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
+
             part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             part_vendor.set_payload(excel_bytes)
             encoders.encode_base64(part_vendor)
@@ -1925,7 +1931,7 @@ with tab2:
                 )
             st.markdown("---")
 
-            # عرض دليل تمييز ألوان الفروع في السلسلة بتصميم داكن متناسق ونصوص واضحة جداً
+            # عرض دليل تمييز ألوان الفروع في السلسلة بتصميم داكن متناسق
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -2054,13 +2060,13 @@ with tab2:
                             
                             return {
                                 "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#ff5a00" if is_clicked_target else b_hex,
+                                "color": "#ff5a00" if is_clicked_target else b_hex,  # خط برتقالي فقط للمنطقة المحددة
                                 "weight": 4.5 if is_clicked_target else (2.2 if is_active_owner else 1.2),
                                 "fillOpacity": 0.80 if is_clicked_target else (0.50 if is_active_owner else 0.25)
                             }
                         return {
                             "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#ff5a00" if is_clicked_target else "#4a5568",
+                            "color": "#ff5a00" if is_clicked_target else "#4a5568",  # خط برتقالي فقط للمنطقة المحددة
                             "weight": 4.0 if is_clicked_target else 1.0,
                             "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
@@ -2775,24 +2781,28 @@ if is_master_admin:
         st.header(T("👥 إدارة المستخدمين والصلاحيات وإعدادات البريد (الأدمن الرئيسي)", "👥 User Management & Email Settings (Master Admin Only)"))
         st.caption(T(f"🔒 صلاحية الوصول لهذه الشاشة محصورة ببريد: `{MASTER_ADMIN_EMAIL}`", f"🔒 Access strictly restricted to: `{MASTER_ADMIN_EMAIL}`"))
         
-        valid_chains_data = df_vendors[df_vendors["clean_cid"] != ""].copy()
+        valid_chains_data = pd.DataFrame()
         chain_opts_map = {}
-        if not valid_chains_data.empty:
-            for cid_val, c_group in valid_chains_data.groupby("clean_cid"):
-                names = [str(n).strip() for n in c_group["clean_chain_name"].unique() if str(n).strip() not in ["", "nan", "None", "-"]]
-                c_display_name = names[0] if names else f"Chain {cid_val}"
-                branch_count = len(c_group)
-                chain_opts_map[str(cid_val)] = f"🏢 {c_display_name} (ID: {cid_val} - {branch_count} {T('فروع', 'branches')})"
+        if not df_vendors.empty and "clean_cid" in df_vendors.columns:
+            valid_chains_data = df_vendors[df_vendors["clean_cid"] != ""].copy()
+            if not valid_chains_data.empty and "clean_chain_name" in valid_chains_data.columns:
+                for cid_val, c_group in valid_chains_data.groupby("clean_cid"):
+                    names = [str(n).strip() for n in c_group["clean_chain_name"].unique() if str(n).strip() not in ["", "nan", "None", "-"]]
+                    c_display_name = names[0] if names else f"Chain {cid_val}"
+                    branch_count = len(c_group)
+                    chain_opts_map[str(cid_val)] = f"🏢 {c_display_name} (ID: {cid_val} - {branch_count} {T('فروع', 'branches')})"
 
-        valid_vendors_data = df_vendors[df_vendors["clean_vid"] != ""].copy()
+        valid_vendors_data = pd.DataFrame()
         vendor_opts_map = {}
-        if not valid_vendors_data.empty:
-            for _, v_row in valid_vendors_data.iterrows():
-                vid_val = str(v_row["clean_vid"]).strip()
-                v_display_name = str(v_row["clean_name"]).strip()
-                v_chain_name = str(v_row["clean_chain_name"]).strip()
-                chain_suffix = f" [سلسلة: {v_chain_name}]" if v_chain_name and v_chain_name not in ["", "nan", "None", "-"] else ""
-                vendor_opts_map[vid_val] = f"💊 {v_display_name} (ID: {vid_val}{chain_suffix})"
+        if not df_vendors.empty and "clean_vid" in df_vendors.columns:
+            valid_vendors_data = df_vendors[df_vendors["clean_vid"] != ""].copy()
+            if not valid_vendors_data.empty:
+                for _, v_row in valid_vendors_data.iterrows():
+                    vid_val = str(v_row.get("clean_vid", "")).strip()
+                    v_display_name = str(v_row.get("clean_name", "")).strip()
+                    v_chain_name = str(v_row.get("clean_chain_name", "")).strip()
+                    chain_suffix = f" [سلسلة: {v_chain_name}]" if v_chain_name and v_chain_name not in ["", "nan", "None", "-"] else ""
+                    vendor_opts_map[vid_val] = f"💊 {v_display_name} (ID: {vid_val}{chain_suffix})"
 
         tab_u1, tab_u2, tab_u3, tab_u4 = st.tabs([
             T("➕ إضافة مستخدم جديد", "➕ Add New User"),
