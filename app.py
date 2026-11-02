@@ -19,18 +19,17 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
-
-# مكتبات فايربيز الرسمية
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
+# 1. إعدادات الصفحة والتصميم واللغة بهوية Shoof by talabat
 # ==========================================
 st.set_page_config(layout="wide", page_title="Shoof by Talabat", page_icon="ط")
 
 st.markdown("""
 <style>
+/* إخفاء عناصر Streamlit الافتراضية في شاشة الدخول فقط لو أمكن، لكننا سنعتمد على CSS عام */
 div[data-testid="stMetric"] {
     background: rgba(255, 255, 255, 0.02) !important;
     border: 1px solid rgba(255, 90, 0, 0.22) !important;
@@ -46,7 +45,7 @@ div[data-testid="stMetricValue"] {
 }
 div[data-testid="stMetricLabel"] {
     font-size: 13px !important;
-    color: #ffffff !important; /* لون النص الأبيض الموحد */
+    color: #ffffff !important;
     font-weight: 600 !important;
 }
 button[kind="primary"], .stButton > button[kind="primary"] {
@@ -88,58 +87,96 @@ section[data-testid="stSidebar"] button:hover {
     color: #ffffff !important;
 }
 
-/* تنسيقات شاشة تسجيل الدخول */
+/* --- تنسيقات شاشة تسجيل الدخول الجديدة --- */
 .login-hero-container {
-    background: #ff5a00;
+    background-color: #ff5a00;
     border-radius: 12px;
     padding: 40px;
     height: 100%;
+    min-height: 450px;
     position: relative;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
-
+.login-hero-logo-box {
+    background: #ffffff; 
+    color: #ff5a00; 
+    border-radius: 8px; 
+    width: 45px; 
+    height: 45px; 
+    display: flex; 
+    justify-content: center; 
+    align-items: center; 
+    font-size: 26px; 
+    font-weight: bold;
+}
+.login-hero-brand {
+    color: #ffffff;
+    line-height: 1.1;
+}
+.login-hero-brand-name {
+    font-weight: 900; 
+    font-size: 20px;
+}
+.login-hero-brand-sub {
+    font-size: 13px; 
+    opacity: 0.9;
+}
 .login-hero-title-small {
-    font-size: 32px;
+    font-size: 42px;
     font-weight: 400;
     color: #ffffff;
     font-style: italic;
-    margin-bottom: 0px;
+    margin-top: auto;
+    margin-bottom: -15px;
+    font-family: serif; /* لمحاكاة التصميم */
 }
-
 .login-hero-title-large {
-    font-size: 64px;
+    font-size: 72px;
     font-weight: 900;
     color: #ffffff;
-    margin-top: -10px;
-    margin-bottom: 20px;
+    margin-bottom: 15px;
+    letter-spacing: -1px;
 }
 .login-hero-subtitle {
      font-size: 16px;
      color: #ffffff;
-     opacity: 0.9;
-     max-width: 80%;
+     opacity: 0.95;
+     max-width: 85%;
+     line-height: 1.5;
 }
-
-.login-card-container {
-    background: #1e1e1e; /* لون خلفية داكن */
-    border-radius: 12px;
-    padding: 40px;
-    height: 100%;
+.login-bg-graphic {
+    position: absolute; 
+    right: -80px; 
+    bottom: -80px; 
+    opacity: 0.2; 
+    width: 400px;
+    pointer-events: none;
+}
+.login-form-container {
+    padding: 20px 40px;
     display: flex;
     flex-direction: column;
     justify-content: center;
+    height: 100%;
 }
-
-/* تحسين وضوح نصوص الإدخال */
+.login-form-title {
+    font-size: 32px;
+    font-weight: 800;
+    color: #ffffff;
+    margin-bottom: 30px;
+}
 .stTextInput label p {
     color: #ffffff !important;
     font-weight: 600;
+    font-size: 14px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 if "lang" not in st.session_state:
-    st.session_state["lang"] = "en" # الافتراضي إنجليزي ليتوافق مع التصميم
+    st.session_state["lang"] = "en"
 
 def T(ar_text, en_text):
     return ar_text if st.session_state.get("lang", "ar") == "ar" else en_text
@@ -560,7 +597,6 @@ def read_google_sheet_csv(url):
     try: return pd.read_csv(csv_url)
     except Exception: return pd.DataFrame()
 
-# دالة استخراج المنطقة التي تم النقر عليها مباشرة من الخريطة
 def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     if not mcd:
         return None, None
@@ -1227,7 +1263,7 @@ if "logged_in" not in st.session_state:
     st.session_state["current_user"] = None
 
 if not st.session_state["logged_in"]:
-    # 1. إعداد شريط اللغة في الأعلى
+    # إعداد شريط اللغة في الأعلى
     lang_col1, lang_col2 = st.columns([9, 1])
     with lang_col2:
         lang_choice = st.radio(
@@ -1245,44 +1281,40 @@ if not st.session_state["logged_in"]:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 2. تقسيم الشاشة إلى عمودين كبيرين (نصف للبراند ونصف للفورم)
     hero_col, form_col = st.columns([1.1, 0.9], gap="large")
     
     with hero_col:
-        st.markdown(f"""
+        # استخدام st.markdown مع unsafe_allow_html=True وبدون أسطر تعليقات HTML مدمجة قد تعرقل الـ parsing
+        st.markdown("""
         <div class="login-hero-container">
-            <!-- الشعار -->
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 60px;">
-                <div style="background: #ffffff; color: #ff5a00; border-radius: 8px; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; font-size: 24px; font-weight: bold;">ط</div>
-                <div style="color: #ffffff;">
-                    <div style="font-weight: 800; font-size: 18px; line-height: 1.1;">Shoof</div>
-                    <div style="font-size: 12px; opacity: 0.8;">by talabat</div>
+                <div class="login-hero-logo-box">ط</div>
+                <div class="login-hero-brand">
+                    <div class="login-hero-brand-name">Shoof</div>
+                    <div class="login-hero-brand-sub">by talabat</div>
                 </div>
             </div>
             
-            <!-- النصوص التسويقية -->
             <div class="login-hero-title-small">Seeing is</div>
             <div class="login-hero-title-large">Believing.</div>
             <div class="login-hero-subtitle">
-                {T('حدد مناطق التوصيل لكل فرع، اضبط الأسعار والأوقات، وأرسل طلبك للمراجعة بكل سهولة.', 'Set delivery zones per branch, adjust pricing, and send the request for review.')}
+                Set delivery zones per branch, adjust pricing, and send the request for review with pinpoint precision.
             </div>
             
-            <!-- أشكال هندسية لتزيين الخلفية (اختياري) -->
-            <div style="position: absolute; right: -50px; bottom: -50px; opacity: 0.15; transform: rotate(15deg);">
-                 <svg width="300" height="300" viewBox="0 0 100 100">
-                    <polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="#ffffff" stroke-width="1.5" />
-                    <circle cx="50" cy="50" r="30" fill="none" stroke="#ffffff" stroke-width="1.5" />
+            <div class="login-bg-graphic">
+                 <svg viewBox="0 0 100 100">
+                    <polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="#ffffff" stroke-width="0.5" />
+                    <circle cx="50" cy="50" r="30" fill="none" stroke="#ffffff" stroke-width="0.5" />
                  </svg>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     with form_col:
-        st.markdown(f"""
-        <div class="login-card-container">
-            <h2 style="color: #ffffff; font-weight: 800; margin-bottom: 25px;">
-                {T('Sign in', 'Sign in')}
-            </h2>
+        st.markdown("""
+        <div class="login-form-container">
+            <div class="login-form-title">Sign in</div>
+        </div>
         """, unsafe_allow_html=True)
         
         with st.form("login_form"):
@@ -1316,8 +1348,6 @@ if not st.session_state["logged_in"]:
                     st.rerun()
                 else:
                     st.error(T("❌ البريد الإلكتروني أو كلمة المرور غير صحيحة.", "❌ Invalid email or password."))
-        
-        st.markdown("</div>", unsafe_allow_html=True)
 
     st.stop()
 
