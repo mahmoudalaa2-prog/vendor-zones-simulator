@@ -27,7 +27,7 @@ from firebase_admin import credentials, firestore
 # ==========================================
 # 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
 # ==========================================
-st.set_page_config(layout="wide", page_title="Pharmacy Coverage Simulator", page_icon="💊")
+st.set_page_config(layout="wide", page_title="Shoof by Talabat", page_icon="ط")
 
 st.markdown("""
 <style>
@@ -46,21 +46,21 @@ div[data-testid="stMetricValue"] {
 }
 div[data-testid="stMetricLabel"] {
     font-size: 13px !important;
-    color: #c9d1d9 !important;
+    color: #ffffff !important; /* لون النص الأبيض الموحد */
     font-weight: 600 !important;
 }
 button[kind="primary"], .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%) !important;
+    background: #ff5a00 !important;
     color: #ffffff !important;
     border: none !important;
-    border-radius: 9px !important;
+    border-radius: 6px !important;
     font-weight: 700 !important;
     padding: 8px 18px !important;
     box-shadow: 0 4px 14px rgba(255, 90, 0, 0.35) !important;
 }
 button[kind="secondary"], .stButton > button[kind="secondary"] {
     border: 1.5px solid rgba(255, 90, 0, 0.5) !important;
-    border-radius: 9px !important;
+    border-radius: 6px !important;
     background: rgba(255, 255, 255, 0.05) !important;
     color: #ffffff !important;
     font-weight: 700 !important;
@@ -79,19 +79,67 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] button {
     background: rgba(255, 90, 0, 0.12) !important;
     border: 1.5px solid #ff5a00 !important;
-    color: #ff7700 !important;
+    color: #ff5a00 !important;
     font-weight: 800 !important;
-    border-radius: 9px !important;
+    border-radius: 6px !important;
 }
 section[data-testid="stSidebar"] button:hover {
     background: #ff5a00 !important;
     color: #ffffff !important;
 }
+
+/* تنسيقات شاشة تسجيل الدخول */
+.login-hero-container {
+    background: #ff5a00;
+    border-radius: 12px;
+    padding: 40px;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+}
+
+.login-hero-title-small {
+    font-size: 32px;
+    font-weight: 400;
+    color: #ffffff;
+    font-style: italic;
+    margin-bottom: 0px;
+}
+
+.login-hero-title-large {
+    font-size: 64px;
+    font-weight: 900;
+    color: #ffffff;
+    margin-top: -10px;
+    margin-bottom: 20px;
+}
+.login-hero-subtitle {
+     font-size: 16px;
+     color: #ffffff;
+     opacity: 0.9;
+     max-width: 80%;
+}
+
+.login-card-container {
+    background: #1e1e1e; /* لون خلفية داكن */
+    border-radius: 12px;
+    padding: 40px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* تحسين وضوح نصوص الإدخال */
+.stTextInput label p {
+    color: #ffffff !important;
+    font-weight: 600;
+}
 </style>
 """, unsafe_allow_html=True)
 
 if "lang" not in st.session_state:
-    st.session_state["lang"] = "ar"
+    st.session_state["lang"] = "en" # الافتراضي إنجليزي ليتوافق مع التصميم
 
 def T(ar_text, en_text):
     return ar_text if st.session_state.get("lang", "ar") == "ar" else en_text
@@ -1064,13 +1112,11 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             </body>
             </html>
             """
-
             msg_vendor = MIMEMultipart()
             msg_vendor['Subject'] = vendor_subject
             msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
             msg_vendor['To'] = submitted_by_email
             msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
-
             part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             part_vendor.set_payload(excel_bytes)
             encoders.encode_base64(part_vendor)
@@ -1174,24 +1220,16 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     return html
 
 # ==========================================
-# 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
+# 5. شاشة تسجيل الدخول المطورة (هوية Shoof)
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["current_user"] = None
 
 if not st.session_state["logged_in"]:
-    top_c1, top_c2 = st.columns([8, 2])
-    with top_c1:
-        st.markdown("""
-        <div style="display: flex; align-items: center; gap: 10px; padding: 5px 0;">
-            <span style="font-size: 24px;">💊</span>
-            <span style="font-weight: 800; font-size: 16px; color: #ff5a00; letter-spacing: 0.5px;">TALABAT OPERATIONS</span>
-            <span style="color: #6e7681;">|</span>
-            <span style="font-size: 13px; color: #8b949e;">Pharmacy & Geospatial Zones Platform</span>
-        </div>
-        """, unsafe_allow_html=True)
-    with top_c2:
+    # 1. إعداد شريط اللغة في الأعلى
+    lang_col1, lang_col2 = st.columns([9, 1])
+    with lang_col2:
         lang_choice = st.radio(
             "Language",
             options=["العربية", "English"],
@@ -1204,79 +1242,64 @@ if not st.session_state["logged_in"]:
         if new_lang != st.session_state["lang"]:
             st.session_state["lang"] = new_lang
             st.rerun()
-
-    st.markdown("<hr style='margin: 10px 0 25px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-
-    col_hero, col_card = st.columns([1.3, 1.0], gap="large")
-
-    with col_hero:
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 2. تقسيم الشاشة إلى عمودين كبيرين (نصف للبراند ونصف للفورم)
+    hero_col, form_col = st.columns([1.1, 0.9], gap="large")
+    
+    with hero_col:
         st.markdown(f"""
-        <div style="padding: 10px 5px;">
-            <div style="display: inline-block; background: rgba(255, 90, 0, 0.15); color: #ff5a00; border: 1px solid rgba(255, 90, 0, 0.3); padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; margin-bottom: 12px;">
-                ⚡ {T("المنصة الموحدة لمحاكاة العمليات والتسعير", "Unified Logistics & Pricing Engine")}
+        <div class="login-hero-container">
+            <!-- الشعار -->
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 60px;">
+                <div style="background: #ffffff; color: #ff5a00; border-radius: 8px; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; font-size: 24px; font-weight: bold;">ط</div>
+                <div style="color: #ffffff;">
+                    <div style="font-weight: 800; font-size: 18px; line-height: 1.1;">Shoof</div>
+                    <div style="font-size: 12px; opacity: 0.8;">by talabat</div>
+                </div>
             </div>
-            <h1 style="font-size: 32px; font-weight: 900; line-height: 1.25; margin-bottom: 24px; color: #ffffff;">
-                {T("لوحة تحكم الصيدليات ومناطق التغطية الجغرافية", "Pharmacy Operations & Zones Management Dashboard")}
-            </h1>
+            
+            <!-- النصوص التسويقية -->
+            <div class="login-hero-title-small">Seeing is</div>
+            <div class="login-hero-title-large">Believing.</div>
+            <div class="login-hero-subtitle">
+                {T('حدد مناطق التوصيل لكل فرع، اضبط الأسعار والأوقات، وأرسل طلبك للمراجعة بكل سهولة.', 'Set delivery zones per branch, adjust pricing, and send the request for review.')}
+            </div>
+            
+            <!-- أشكال هندسية لتزيين الخلفية (اختياري) -->
+            <div style="position: absolute; right: -50px; bottom: -50px; opacity: 0.15; transform: rotate(15deg);">
+                 <svg width="300" height="300" viewBox="0 0 100 100">
+                    <polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="#ffffff" stroke-width="1.5" />
+                    <circle cx="50" cy="50" r="30" fill="none" stroke="#ffffff" stroke-width="1.5" />
+                 </svg>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
-        kpi_c1, kpi_c2, kpi_c3 = st.columns(3)
-        with kpi_c1:
-            st.markdown(f"""
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff5a00; border-radius: 12px; padding: 16px 12px; text-align: center;">
-                <div style="font-size: 22px; font-weight: 900; color: #ff5a00;">1,200+</div>
-                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("مضلع جغرافي", "Geospatial Zones")}</div>
-                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("خرائط دقيقة لحظية", "Polygons simulator")}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with kpi_c2:
-            st.markdown(f"""
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #28a745; border-radius: 12px; padding: 16px 12px; text-align: center;">
-                <div style="font-size: 22px; font-weight: 900; color: #28a745;">400+</div>
-                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("فرع وسلسلة صيدليات", "Pharmacy Branches")}</div>
-                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تغطية شاملة للمحافظات", "Nationwide coverage")}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with kpi_c3:
-            st.markdown(f"""
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff7700; border-radius: 12px; padding: 16px 12px; text-align: center;">
-                <div style="font-size: 22px; font-weight: 900; color: #ff7700;">Live GPS</div>
-                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("حساب المسافات بدقة", "Distance Engine")}</div>
-                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تعديل فوري وسريع", "Haversine & Edit tag")}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    with col_card:
+    with form_col:
+        st.markdown(f"""
+        <div class="login-card-container">
+            <h2 style="color: #ffffff; font-weight: 800; margin-bottom: 25px;">
+                {T('Sign in', 'Sign in')}
+            </h2>
+        """, unsafe_allow_html=True)
+        
         with st.form("login_form"):
-            st.markdown(f"""
-            <div style="text-align: center; margin-bottom: 20px;">
-                <div style="width: 52px; height: 52px; background: rgba(255, 90, 0, 0.15); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 10px; border: 1px solid rgba(255, 90, 0, 0.3);">
-                    <span style="font-size: 24px;">🔐</span>
-                </div>
-                <h3 style="margin: 0; font-size: 19px; font-weight: 800; color: #ffffff;">
-                    {T("تسجيل الدخول للنظام", "Portal Access Login")}
-                </h3>
-                <p style="margin: 4px 0 0 0; font-size: 12px; color: #8b949e;">
-                    {T("أدخل البريد الإلكتروني وكلمة المرور للمتابعة", "Enter corporate credentials to access dashboard")}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-
             email_input = st.text_input(
-                T("البريد الإلكتروني (Email):", "Email Address:"),
+                T("Email", "Email"),
                 placeholder="name@talabat.com"
             ).strip().lower()
 
             password_input = st.text_input(
-                T("كلمة المرور (Password):", "Password:"),
+                T("Password", "Password"),
                 type="password",
                 placeholder="••••••••"
             ).strip()
 
             st.write("")
             login_btn = st.form_submit_button(
-                T("🚀 الدخول إلى الداشبورد (Enter Dashboard)", "🚀 Enter Dashboard"),
+                T("Sign in", "Sign in"),
                 type="primary",
                 use_container_width=True
             )
@@ -1293,15 +1316,14 @@ if not st.session_state["logged_in"]:
                     st.rerun()
                 else:
                     st.error(T("❌ البريد الإلكتروني أو كلمة المرور غير صحيحة.", "❌ Invalid email or password."))
-
-        st.markdown(f"""
-        <div style="text-align: center; margin-top: 15px; font-size: 11px; color: #6e7681;">
-            🔒 {T("نظام مشفر ومحمي • Talabat Q-Commerce & Logistics Platform", "Encrypted & Authorized • Talabat Logistics Platform")}
-        </div>
-        """, unsafe_allow_html=True)
+        
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.stop()
 
+# ==========================================
+# (باقي كود التطبيق كما هو بعد تسجيل الدخول)
+# ==========================================
 current_user = st.session_state["current_user"]
 is_admin = current_user["role"] == "admin"
 is_master_admin = check_is_master_admin(current_user)
@@ -1360,7 +1382,7 @@ with st.sidebar:
         st.rerun()
         
     st.markdown(
-        f"""<div style='background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 90, 0, 0.25); padding: 8px; border-radius: 8px; font-size: 11.5px; color: #c9d1d9; text-align: center; margin: 8px 0;'>
+        f"""<div style='background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 90, 0, 0.25); padding: 8px; border-radius: 8px; font-size: 11.5px; color: #ffffff; text-align: center; margin: 8px 0;'>
             🕒 <b>{T('تاريخ آخر مزامنة', 'Last Synced')}:</b><br>
             <span style='color: #ff5a00; font-weight: bold; font-family: monospace;'>{st.session_state['last_sync_time']}</span>
         </div>""",
@@ -1604,7 +1626,7 @@ if is_admin:
                     for idx, (b_vid, b_info) in enumerate(vendor_color_map.items()):
                         with leg_cols[idx % n_cols]:
                             st.markdown(
-                                f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 5px solid {b_info.get('hex', '#28a745')}; background: #f8f9fa; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
+                                f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 5px solid {b_info.get('hex', '#28a745')}; background: #f8f9fa; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); color: #1e1e1e;'>"
                                 f"<b>{b_info.get('name', b_vid)}</b><br><span style='color:gray;'>Vendor ID: {b_vid}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True
@@ -2060,13 +2082,13 @@ with tab2:
                             
                             return {
                                 "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#ff5a00" if is_clicked_target else b_hex,  # خط برتقالي فقط للمنطقة المحددة
+                                "color": "#ff5a00" if is_clicked_target else b_hex,
                                 "weight": 4.5 if is_clicked_target else (2.2 if is_active_owner else 1.2),
                                 "fillOpacity": 0.80 if is_clicked_target else (0.50 if is_active_owner else 0.25)
                             }
                         return {
                             "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#ff5a00" if is_clicked_target else "#4a5568",  # خط برتقالي فقط للمنطقة المحددة
+                            "color": "#ff5a00" if is_clicked_target else "#4a5568",
                             "weight": 4.0 if is_clicked_target else 1.0,
                             "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
