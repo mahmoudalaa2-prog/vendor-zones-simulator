@@ -25,9 +25,9 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم واللغة بهوية Shoof
+# 1. إعدادات الصفحة والتصميم واللغة بهوية طلبات
 # ==========================================
-st.set_page_config(layout="wide", page_title="Shoof by Talabat", page_icon="ط")
+st.set_page_config(layout="wide", page_title="Pharmacy Coverage Simulator", page_icon="💊")
 
 st.markdown("""
 <style>
@@ -46,21 +46,21 @@ div[data-testid="stMetricValue"] {
 }
 div[data-testid="stMetricLabel"] {
     font-size: 13px !important;
-    color: #ffffff !important;
+    color: #c9d1d9 !important;
     font-weight: 600 !important;
 }
 button[kind="primary"], .stButton > button[kind="primary"] {
-    background: #ff5a00 !important;
+    background: linear-gradient(135deg, #ff5a00 0%, #ff7700 100%) !important;
     color: #ffffff !important;
     border: none !important;
-    border-radius: 6px !important;
+    border-radius: 9px !important;
     font-weight: 700 !important;
-    padding: 10px 20px !important;
+    padding: 8px 18px !important;
     box-shadow: 0 4px 14px rgba(255, 90, 0, 0.35) !important;
 }
 button[kind="secondary"], .stButton > button[kind="secondary"] {
     border: 1.5px solid rgba(255, 90, 0, 0.5) !important;
-    border-radius: 6px !important;
+    border-radius: 9px !important;
     background: rgba(255, 255, 255, 0.05) !important;
     color: #ffffff !important;
     font-weight: 700 !important;
@@ -79,89 +79,19 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] button {
     background: rgba(255, 90, 0, 0.12) !important;
     border: 1.5px solid #ff5a00 !important;
-    color: #ff5a00 !important;
+    color: #ff7700 !important;
     font-weight: 800 !important;
-    border-radius: 6px !important;
+    border-radius: 9px !important;
 }
 section[data-testid="stSidebar"] button:hover {
     background: #ff5a00 !important;
     color: #ffffff !important;
 }
-
-/* تنسيقات شاشة Shoof */
-.shoof-hero {
-    background: #ff5a00;
-    border-radius: 16px;
-    padding: 44px 38px;
-    height: 480px;
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-}
-.shoof-logo-box {
-    background: #ffffff;
-    color: #ff5a00;
-    border-radius: 10px;
-    width: 44px;
-    height: 44px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 26px;
-    font-weight: 900;
-}
-.shoof-title-italic {
-    font-size: 44px;
-    font-style: italic;
-    color: #ffffff;
-    font-family: Georgia, serif;
-    margin-bottom: -15px;
-}
-.shoof-title-bold {
-    font-size: 68px;
-    font-weight: 900;
-    color: #ffffff;
-    letter-spacing: -1.5px;
-    margin-bottom: 12px;
-}
-.shoof-subtitle {
-    font-size: 15px;
-    color: #ffffff;
-    opacity: 0.95;
-    line-height: 1.5;
-    max-width: 90%;
-}
-.shoof-svg-bg {
-    position: absolute;
-    right: -60px;
-    bottom: -60px;
-    width: 320px;
-    height: 320px;
-    opacity: 0.15;
-    pointer-events: none;
-}
-.shoof-form-box {
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    padding: 40px 32px;
-    min-height: 480px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-}
-.stTextInput label p {
-    color: #ffffff !important;
-    font-weight: 600;
-    font-size: 14px;
-}
 </style>
 """, unsafe_allow_html=True)
 
 if "lang" not in st.session_state:
-    st.session_state["lang"] = "en"
+    st.session_state["lang"] = "ar"
 
 def T(ar_text, en_text):
     return ar_text if st.session_state.get("lang", "ar") == "ar" else en_text
@@ -582,6 +512,7 @@ def read_google_sheet_csv(url):
     try: return pd.read_csv(csv_url)
     except Exception: return pd.DataFrame()
 
+# دالة استخراج المنطقة التي تم النقر عليها مباشرة من الخريطة
 def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     if not mcd:
         return None, None
@@ -607,7 +538,7 @@ def extract_clicked_zone_direct(mcd, pa_gdf, all_zones_list):
     return None, None
 
 # ==========================================
-# 4. جلب وتجهيز البيانات مع كاش 24 ساعة
+# 4. جلب وتجهيز البيانات مع كاش 24 ساعة للسرعة الفائقة
 # ==========================================
 @st.cache_data(ttl=86400)
 def load_data():
@@ -978,6 +909,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
 
     try:
         date_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             records_df.to_excel(writer, index=False, sheet_name=f"Vendor_{str(vendor_id)[:10]}")
@@ -1032,12 +964,14 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                 <div class="content">
                     <p style="font-size: 15px; margin-top: 0;">Dear <b>Mahmoud Alaa</b>,</p>
                     <p>A new delivery zone & pricing configuration has just been submitted via the <b>Vendor Portal</b>. Please find the operational details below:</p>
+                    
                     <div class="box">
                         <div style="font-size: 16px; font-weight: 800; color: #ea580c;">🏬 {vendor_name}</div>
                         <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>Vendor ID:</b> <code>{vendor_id}</code></div>
                         <div style="font-size: 13px; color: #334155; margin-top: 2px;"><b>Submitted By:</b> {submitted_by_email}</div>
                         <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>Timestamp:</b> {date_str}</div>
                     </div>
+
                     <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📊 Submission Summary:</h4>
                     <table class="table">
                         <tr><th>Total Zones in Request</th><td><b>{total_count}</b> zones</td></tr>
@@ -1045,6 +979,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                         <tr><th>Updated Zones (Fee / SLA / Min Order)</th><td style="color:#ea580c; font-weight:bold;">{edit_count}</td></tr>
                         <tr><th>Deactivated Zones</th><td style="color:#dc2626; font-weight:bold;">-{deact_count}</td></tr>
                     </table>
+
                     <div class="notice">
                         📎 <b>Attachment:</b> Complete Excel workbook <code>{filename}</code> is attached containing exact polygon coordinates, computed distance (km), delivery fees, delivery SLAs, and Minimum Order Amount.
                     </div>
@@ -1103,11 +1038,13 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                     <div class="content">
                         <p style="font-size: 15px; margin-top: 0;">عزيزنا شريك النجاح / <b>فريق {vendor_name}</b>،</p>
                         <p>نشكركم على استخدام بوابة الفيندور. نود إحاطتكم بأنه تم استلام وتوثيق طلب تعديل مناطق التغطية وأسعار التوصيل والحد الأدنى للطلب بنجاح، وجارٍ مراجعته وتدقيقه من قبل فريق العمليات واللوجستيات.</p>
+                        
                         <div class="box">
                             <div style="font-size: 16px; font-weight: 800; color: #15803d;">🏬 {vendor_name}</div>
                             <div style="font-size: 13px; color: #334155; margin-top: 4px;"><b>كود الفرع (Vendor ID):</b> <code>{vendor_id}</code></div>
                             <div style="font-size: 12px; color: #64748b; margin-top: 2px;">🕒 <b>تاريخ ووقت الإرسال:</b> {date_str}</div>
                         </div>
+
                         <h4 style="margin: 22px 0 8px 0; font-size: 14px; color: #0f172a;">📋 ملخص التعديلات المرسلة في هذا الطلب:</h4>
                         <table class="table">
                             <tr><th>إجمالي المناطق في الطلب</th><td><b>{total_count}</b> مناطق</td></tr>
@@ -1115,6 +1052,7 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
                             <tr><th>مناطق تم تعديل سعرها أو وقتها أو حدها الأدنى</th><td style="color:#ea580c; font-weight:bold;">{edit_count} منطقة</td></tr>
                             <tr><th>مناطق ملغاة التفعيل</th><td style="color:#dc2626; font-weight:bold;">-{deact_count} منطقة</td></tr>
                         </table>
+
                         <div class="notice">
                             📎 <b>نسخة من طلبكم:</b> مرفق بهذه الرسالة ملف إكسيل كامل <code>{filename}</code> يتضمن كافة تفاصيل المناطق التي قمتم بتعديلها مع المسافات المحسوبة وأوقات ورسوم التوصيل والحد الأدنى للطلب المقترح للاحتفاظ بها في سجلاتكم.
                         </div>
@@ -1126,11 +1064,13 @@ def send_request_emails(vendor_id, vendor_name, records_df, submitted_by_email):
             </body>
             </html>
             """
+
             msg_vendor = MIMEMultipart()
             msg_vendor['Subject'] = vendor_subject
             msg_vendor['From'] = f"Talabat Vendor Portal <{sender_email}>"
             msg_vendor['To'] = submitted_by_email
             msg_vendor.attach(MIMEText(vendor_html, 'html', 'utf-8'))
+
             part_vendor = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             part_vendor.set_payload(excel_bytes)
             encoders.encode_base64(part_vendor)
@@ -1234,15 +1174,24 @@ def build_vendor_popup_html(v_row, df_delivery, df_p):
     return html
 
 # ==========================================
-# 5. شاشة تسجيل الدخول المطورة (هوية Shoof)
+# 5. شاشة تسجيل الدخول المطورة كبوابة داشبورد متكاملة
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["current_user"] = None
 
 if not st.session_state["logged_in"]:
-    lang_col1, lang_col2 = st.columns([9, 1])
-    with lang_col2:
+    top_c1, top_c2 = st.columns([8, 2])
+    with top_c1:
+        st.markdown("""
+        <div style="display: flex; align-items: center; gap: 10px; padding: 5px 0;">
+            <span style="font-size: 24px;">💊</span>
+            <span style="font-weight: 800; font-size: 16px; color: #ff5a00; letter-spacing: 0.5px;">TALABAT OPERATIONS</span>
+            <span style="color: #6e7681;">|</span>
+            <span style="font-size: 13px; color: #8b949e;">Pharmacy & Geospatial Zones Platform</span>
+        </div>
+        """, unsafe_allow_html=True)
+    with top_c2:
         lang_choice = st.radio(
             "Language",
             options=["العربية", "English"],
@@ -1256,59 +1205,78 @@ if not st.session_state["logged_in"]:
             st.session_state["lang"] = new_lang
             st.rerun()
 
-    st.write("")
+    st.markdown("<hr style='margin: 10px 0 25px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
 
-    hero_col, form_col = st.columns([1.1, 0.9], gap="large")
+    col_hero, col_card = st.columns([1.3, 1.0], gap="large")
 
-    with hero_col:
-        # كتابة الـ HTML بسطر واحد بدون أي مسافات بادئة لتفادي خطأ Code Block
-        hero_html = (
-            '<div class="shoof-hero">'
-            '<div style="display: flex; align-items: center; gap: 12px;">'
-            '<div class="shoof-logo-box">ط</div>'
-            '<div style="color: #ffffff; line-height: 1.1;">'
-            '<div style="font-weight: 900; font-size: 22px;">Shoof</div>'
-            '<div style="font-size: 13px; opacity: 0.9;">by talabat</div>'
-            '</div>'
-            '</div>'
-            '<div>'
-            '<div class="shoof-title-italic">Seeing is</div>'
-            '<div class="shoof-title-bold">Believing.</div>'
-            '<div class="shoof-subtitle">'
-            + T("حدد مناطق التوصيل لكل فرع، اضبط الأسعار والأوقات، وأرسل طلبك للمراجعة بكل سهولة.",
-                "Set delivery zones per branch, adjust pricing, and send the request for review.")
-            + '</div>'
-            '</div>'
-            '<div class="shoof-svg-bg">'
-            '<svg viewBox="0 0 100 100" width="100%" height="100%">'
-            '<polygon points="50,5 95,28 95,72 50,95 5,72 5,28" fill="none" stroke="#ffffff" stroke-width="0.8" />'
-            '<circle cx="50" cy="50" r="32" fill="none" stroke="#ffffff" stroke-width="0.8" />'
-            '<line x1="50" y1="5" x2="50" y2="95" stroke="#ffffff" stroke-width="0.5" stroke-dasharray="2,2" />'
-            '</svg>'
-            '</div>'
-            '</div>'
-        )
-        st.markdown(hero_html, unsafe_allow_html=True)
+    with col_hero:
+        st.markdown(f"""
+        <div style="padding: 10px 5px;">
+            <div style="display: inline-block; background: rgba(255, 90, 0, 0.15); color: #ff5a00; border: 1px solid rgba(255, 90, 0, 0.3); padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; margin-bottom: 12px;">
+                ⚡ {T("المنصة الموحدة لمحاكاة العمليات والتسعير", "Unified Logistics & Pricing Engine")}
+            </div>
+            <h1 style="font-size: 32px; font-weight: 900; line-height: 1.25; margin-bottom: 24px; color: #ffffff;">
+                {T("لوحة تحكم الصيدليات ومناطق التغطية الجغرافية", "Pharmacy Operations & Zones Management Dashboard")}
+            </h1>
+        </div>
+        """, unsafe_allow_html=True)
 
-    with form_col:
-        st.markdown('<div class="shoof-form-box">', unsafe_allow_html=True)
-        st.markdown('<h2 style="color: #ffffff; font-size: 34px; font-weight: 800; margin: 0 0 25px 0;">Sign in</h2>', unsafe_allow_html=True)
+        kpi_c1, kpi_c2, kpi_c3 = st.columns(3)
+        with kpi_c1:
+            st.markdown(f"""
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff5a00; border-radius: 12px; padding: 16px 12px; text-align: center;">
+                <div style="font-size: 22px; font-weight: 900; color: #ff5a00;">1,200+</div>
+                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("مضلع جغرافي", "Geospatial Zones")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("خرائط دقيقة لحظية", "Polygons simulator")}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with kpi_c2:
+            st.markdown(f"""
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #28a745; border-radius: 12px; padding: 16px 12px; text-align: center;">
+                <div style="font-size: 22px; font-weight: 900; color: #28a745;">400+</div>
+                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("فرع وسلسلة صيدليات", "Pharmacy Branches")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تغطية شاملة للمحافظات", "Nationwide coverage")}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with kpi_c3:
+            st.markdown(f"""
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 90, 0, 0.2); border-top: 3px solid #ff7700; border-radius: 12px; padding: 16px 12px; text-align: center;">
+                <div style="font-size: 22px; font-weight: 900; color: #ff7700;">Live GPS</div>
+                <div style="font-size: 12px; font-weight: 700; color: #c9d1d9; margin-top: 4px;">{T("حساب المسافات بدقة", "Distance Engine")}</div>
+                <div style="font-size: 10.5px; color: #8b949e; margin-top: 2px;">{T("تعديل فوري وسريع", "Haversine & Edit tag")}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
+    with col_card:
         with st.form("login_form"):
+            st.markdown(f"""
+            <div style="text-align: center; margin-bottom: 20px;">
+                <div style="width: 52px; height: 52px; background: rgba(255, 90, 0, 0.15); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 10px; border: 1px solid rgba(255, 90, 0, 0.3);">
+                    <span style="font-size: 24px;">🔐</span>
+                </div>
+                <h3 style="margin: 0; font-size: 19px; font-weight: 800; color: #ffffff;">
+                    {T("تسجيل الدخول للنظام", "Portal Access Login")}
+                </h3>
+                <p style="margin: 4px 0 0 0; font-size: 12px; color: #8b949e;">
+                    {T("أدخل البريد الإلكتروني وكلمة المرور للمتابعة", "Enter corporate credentials to access dashboard")}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
             email_input = st.text_input(
-                T("البريد الإلكتروني (Email)", "Email"),
+                T("البريد الإلكتروني (Email):", "Email Address:"),
                 placeholder="name@talabat.com"
             ).strip().lower()
 
             password_input = st.text_input(
-                T("كلمة المرور (Password)", "Password"),
+                T("كلمة المرور (Password):", "Password:"),
                 type="password",
                 placeholder="••••••••"
             ).strip()
 
             st.write("")
             login_btn = st.form_submit_button(
-                T("تسجيل الدخول", "Sign in"),
+                T("🚀 الدخول إلى الداشبورد (Enter Dashboard)", "🚀 Enter Dashboard"),
                 type="primary",
                 use_container_width=True
             )
@@ -1326,13 +1294,14 @@ if not st.session_state["logged_in"]:
                 else:
                     st.error(T("❌ البريد الإلكتروني أو كلمة المرور غير صحيحة.", "❌ Invalid email or password."))
 
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="text-align: center; margin-top: 15px; font-size: 11px; color: #6e7681;">
+            🔒 {T("نظام مشفر ومحمي • Talabat Q-Commerce & Logistics Platform", "Encrypted & Authorized • Talabat Logistics Platform")}
+        </div>
+        """, unsafe_allow_html=True)
 
     st.stop()
 
-# ==========================================
-# ما بعد تسجيل الدخول (داشبورد العمليات)
-# ==========================================
 current_user = st.session_state["current_user"]
 is_admin = current_user["role"] == "admin"
 is_master_admin = check_is_master_admin(current_user)
@@ -1391,7 +1360,7 @@ with st.sidebar:
         st.rerun()
         
     st.markdown(
-        f"""<div style='background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 90, 0, 0.25); padding: 8px; border-radius: 8px; font-size: 11.5px; color: #ffffff; text-align: center; margin: 8px 0;'>
+        f"""<div style='background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 90, 0, 0.25); padding: 8px; border-radius: 8px; font-size: 11.5px; color: #c9d1d9; text-align: center; margin: 8px 0;'>
             🕒 <b>{T('تاريخ آخر مزامنة', 'Last Synced')}:</b><br>
             <span style='color: #ff5a00; font-weight: bold; font-family: monospace;'>{st.session_state['last_sync_time']}</span>
         </div>""",
@@ -1635,7 +1604,7 @@ if is_admin:
                     for idx, (b_vid, b_info) in enumerate(vendor_color_map.items()):
                         with leg_cols[idx % n_cols]:
                             st.markdown(
-                                f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 5px solid {b_info.get('hex', '#28a745')}; background: #f8f9fa; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); color: #1e1e1e;'>"
+                                f"<div style='padding:5px 8px; border-radius:5px; margin-bottom:5px; border-left: 5px solid {b_info.get('hex', '#28a745')}; background: #f8f9fa; font-size:11.5px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>"
                                 f"<b>{b_info.get('name', b_vid)}</b><br><span style='color:gray;'>Vendor ID: {b_vid}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True
@@ -1962,6 +1931,7 @@ with tab2:
                 )
             st.markdown("---")
 
+            # عرض دليل تمييز ألوان الفروع في السلسلة بتصميم داكن متناسق
             if len(vd) > 1:
                 st.write(T("🎨 **دليل تمييز ألوان الفروع في السلسلة:**", "🎨 **Branch Colors in Chain:**"))
                 n_cols = min(max(len(vd), 1), 4)
@@ -2026,6 +1996,8 @@ with tab2:
                 st.caption(T("💡 انقر على أي منطقة على الخريطة ليتم اختيارها مباشرة في خانة التعديل أو الإضافة أو الإزالة.", "💡 Click any zone on the map to select it directly in the control panel."))
 
                 active_row = vd[vd["clean_vid"] == active_vid]
+                
+                # حساب النطاق الجغرافي المشترك للفرع ومناطقه لتوسيطهما معاً بدقة وبزوم متوازن (12)
                 active_z_names = set(k.strip().lower() for k in working_alloc.get(active_vid, {}).keys())
                 branch_zones_gdf = gdf_areas[gdf_areas["Delivery Location Area Name"].astype(str).str.strip().str.lower().isin(active_z_names)] if not gdf_areas.empty else gpd.GeoDataFrame()
 
@@ -2088,13 +2060,13 @@ with tab2:
                             
                             return {
                                 "fillColor": "#ff5a00" if is_clicked_target else b_hex,
-                                "color": "#ff5a00" if is_clicked_target else b_hex,
+                                "color": "#ff5a00" if is_clicked_target else b_hex,  # خط برتقالي فقط للمنطقة المحددة
                                 "weight": 4.5 if is_clicked_target else (2.2 if is_active_owner else 1.2),
                                 "fillOpacity": 0.80 if is_clicked_target else (0.50 if is_active_owner else 0.25)
                             }
                         return {
                             "fillColor": "#ff5a00" if is_clicked_target else "#a0aec0",
-                            "color": "#ff5a00" if is_clicked_target else "#4a5568",
+                            "color": "#ff5a00" if is_clicked_target else "#4a5568",  # خط برتقالي فقط للمنطقة المحددة
                             "weight": 4.0 if is_clicked_target else 1.0,
                             "fillOpacity": 0.75 if is_clicked_target else 0.08
                         }
@@ -2103,9 +2075,9 @@ with tab2:
                         pa[["Delivery Location Area Name", "geometry"]].to_json(),
                         style_function=get_portal_zone_styling,
                         highlight_function=lambda feature: {
-                            "color": "#ff5a00",
-                            "weight": 3.5,
-                            "fillOpacity": 0.65
+                            "color": "#ff5a00",       # تحديد برتقالي فاقع عند مرور الماوس
+                            "weight": 3.5,            # سمك الخط الخارجي
+                            "fillOpacity": 0.65       # وضوح لون المنطقة أثناء مرور الماوس
                         },
                         tooltip=folium.GeoJsonTooltip(
                             fields=["Delivery Location Area Name"],
@@ -2170,7 +2142,9 @@ with tab2:
                         unsafe_allow_html=True
                     )
 
-                # Bulk Upload
+                # ========================================================
+                # ميزة رفع ملف إكسيل / CSV مجمع (Bulk Upload)
+                # ========================================================
                 with st.expander(T("📂 رفع ملف إكسيل / CSV مجمع للمناطق (Bulk Upload)", "📂 Bulk Upload CSV / Excel"), expanded=False):
                     st.caption(T(
                         "ارفع ملف إكسيل أو CSV يحتوي على أعمدة: (Zone, Delivery Time, Delivery Fees, Minimum Order Amount) مع إمكانية إضافة كود الفرع (Vendor ID) لتوزيع عدة فروع بالسلسلة.",
@@ -2487,7 +2461,7 @@ with tab2:
                         st.session_state["portal_show_diff"] = True
                         st.rerun()
 
-            # جدول مراجعة التعديلات
+            # جدول مراجعة التعديلات مع خاصية استبعاد وحذف المناطق
             if st.session_state.get("portal_show_diff"):
                 st.markdown("---")
                 st.subheader(T("💰 جدول مراجعة المناطق المعدلة فقط (Modifications Only)", "💰 Review Table - Modified Zones Only"))
